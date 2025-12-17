@@ -17,7 +17,6 @@ USE_OPENAI = False
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 client = None
 try:
-    # Prefer Streamlit secrets when running on Streamlit Cloud
     api_key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
     if not api_key:
         api_key = os.environ.get("OPENAI_API_KEY", None)
@@ -82,10 +81,9 @@ def build_index(docs: List[Tuple[str, str]]):
     sources = [d[0] for d in docs]
     corpus = [d[1] for d in docs]
     if not corpus:
-        # keep vectorizer minimally fit to avoid errors
         corpus = ["placeholder text for empty corpus"]
         sources = ["placeholder.txt"]
-    # Avoid max_df/min_df conflict when there are very few documents
+    # Safe params for tiny corpora to avoid max_df/min_df conflicts
     n_docs = len(corpus)
     if n_docs < 2:
         vectorizer = TfidfVectorizer(stop_words="english", min_df=1, max_df=1.0)
@@ -122,7 +120,6 @@ Return JSON with keys: steps (list of strings), citations (list of 'Source: file
     return prompt
 
 def offline_plan(role: str, scenario: str, snippets: List[Snippet]) -> dict:
-    # Deterministic fallback without LLM
     steps = [
         f"Confirm scope for {role} and locate applicable SOP section(s).",
         "Review inclusion/exclusion criteria and protocol requirements relevant to the scenario.",
@@ -172,19 +169,41 @@ def generate_guidance(role: str, scenario: str, snippets: List[Snippet]) -> dict
 # ---------------- UI ----------------
 st.set_page_config(page_title="CLINI-Q SOP Navigator", page_icon="🧭", layout="wide")
 
-# --- Hero header with logo and description ---
-with st.container():
-    col1, col2 = st.columns([1, 3], vertical_alignment="center")
-    with col1:
-        st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), use_column_width=True)
-    with col2:
-        st.markdown("Smart Assistant for Clinical Trial SOP Navigation")
-        st.markdown(
-            "I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, "
-            "CLINI-Q helps research teams navigate essential documentation, regulatory requirements, and "
-            "Good Clinical Practice (GCP) standards with clarity and confidence."
-        )
-st.divider()
+# ---- Centered hero like your example ----
+st.markdown(
+    """
+    <style>
+      .hero { text-align:center; margin-top:0.25rem; }
+      .hero h1 { font-size: 2.0rem; font-weight: 800; margin: .2rem 0 .3rem; }
+      .hero h2 { font-size: 1.15rem; font-weight: 700; margin: .1rem 0 .6rem; }
+      .hero p  { font-size: 1rem; color:#333; max-width: 900px; margin: 0 auto .6rem; }
+      .divider-strong { border-top: 4px solid #222; margin: .6rem 0 1rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Big centered logo
+center = st.columns([1, 2, 1])[1]
+with center:
+    st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), use_column_width=True)
+
+# Headline, subtitle, and description
+st.markdown(
+    """
+    <div class="hero">
+      <h1>CLINI-Q</h1>
+      <h2>Smart Assistant for Clinical Trial SOP Navigation</h2>
+      <p>
+        I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks,
+        CLINI-Q helps research teams navigate essential documentation, regulatory requirements, and
+        Good Clinical Practice (GCP) standards with clarity and confidence.
+      </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
 
 st.caption(DISCLAIMER)
 
@@ -234,3 +253,4 @@ else:
 
 st.divider()
 st.caption("MVP scope: No medical advice. No PHI/PII. Not a submission tool. Always verify locally.")
+
