@@ -203,8 +203,7 @@ st.markdown(
 st.markdown(
     """
     <div class="hero">
-      <h1>🛡️ CLINI-Q Clinical Trial SOP Assistant 🛡️</h1>
-      <h2>💡 Smart Assistant for Clinical Trial SOP Navigation</h2>
+      <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
       <p>
         I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks,
         CLINI-Q helps research teams navigate essential documentation, regulatory requirements, and
