@@ -463,7 +463,7 @@ def main():
             unsafe_allow_html=True,
         )
 
-    st.caption("⚖️ Demo only. No PHI/PII. Always verify locally.")
+    st.caption("© 2025 CLINIQ ⚖️Disclaimer: This is a demo tool only. For official guidanceNo PHI/PII without accessing sensitive data. For official guidance, refer to your office policies.")
 
 # -------- import-safe entrypoint --------
 if __name__ == "__main__":
