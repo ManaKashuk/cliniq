@@ -1,4 +1,3 @@
-
 import os
 import streamlit as st
 from typing import List, Tuple
@@ -37,10 +36,10 @@ ROLES = {
 }
 
 DEFAULT_SCENARIOS = [
-    "How do I document an adverse event (AE) for a subject?",
     "What steps are required before dosing an investigational product (IP)?",
-    "How do I manage delegation logs for new team members?",
+    "How do I document an adverse event (AE) for a subject?",
     "What is the procedure to report a protocol deviation?",
+    "How do I manage delegation logs for new team members?",
 ]
 
 DISCLAIMER = (
@@ -49,6 +48,7 @@ DISCLAIMER = (
     "or to handle protected health information."
 )
 
+# ---------------- Data classes & helpers ----------------
 @dataclass
 class Snippet:
     text: str
@@ -98,10 +98,7 @@ def retrieve(query: str, vectorizer, matrix, sources, corpus, k: int = 5) -> Lis
     q_vec = vectorizer.transform([query])
     sims = cosine_similarity(q_vec, matrix).ravel()
     idxs = sims.argsort()[::-1][:k]
-    results = []
-    for i in idxs:
-        results.append(Snippet(text=corpus[i][:2000], source=sources[i], score=float(sims[i])))
-    return results
+    return [Snippet(text=corpus[i][:2000], source=sources[i], score=float(sims[i])) for i in idxs]
 
 def draft_prompt(role: str, scenario: str, snippets: List[Snippet]) -> str:
     context_blocks = "\n\n".join([f"[Source: {s.source}]\n{s.text}" for s in snippets])
@@ -169,31 +166,35 @@ def generate_guidance(role: str, scenario: str, snippets: List[Snippet]) -> dict
 # ---------------- UI ----------------
 st.set_page_config(page_title="CLINI-Q SOP Navigator", page_icon="🧭", layout="wide")
 
-# ---- Centered hero like your example ----
+# Global styles to mimic RISe layout
 st.markdown(
     """
     <style>
-      .hero { text-align:center; margin-top:0.25rem; }
-      .hero h1 { font-size: 2.0rem; font-weight: 800; margin: .2rem 0 .3rem; }
-      .hero h2 { font-size: 1.15rem; font-weight: 700; margin: .1rem 0 .6rem; }
-      .hero p  { font-size: 1rem; color:#333; max-width: 900px; margin: 0 auto .6rem; }
-      .divider-strong { border-top: 4px solid #222; margin: .6rem 0 1rem; }
+      .hero { text-align: center; margin-top: .3rem; }
+      .hero h1 { font-size: 2.2rem; font-weight: 800; margin: .2rem 0 .2rem; }
+      .hero h2 { font-size: 1.1rem; font-weight: 700; font-style: italic; margin: .1rem 0 .6rem; }
+      .hero p  { font-size: 1rem; color:#333; max-width: 950px; margin: 0 auto .8rem; }
+      .divider-strong { border-top: 4px solid #222; margin: .2rem 0 1.2rem; }
+      .label { color:#6b7280; font-size:.9rem; margin:.2rem 0 .2rem; }
+      .hint  { color:#6b7280; font-size:.85rem; }
+      .chiprow { display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.4rem; }
+      .chiprow button { border-radius:9999px; padding:.35rem .8rem; border:1px solid #e5e7eb; background:#f9fafb; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Big centered logo
+# --- Centered big logo ---
 center = st.columns([1, 2, 1])[1]
 with center:
     st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), use_column_width=True)
 
-# Headline, subtitle, and description
+# --- Title, subtitle, description (exactly like RISe pattern) ---
 st.markdown(
     """
     <div class="hero">
-      <h1>CLINI-Q</h1>
-      <h2>Smart Assistant for Clinical Trial SOP Navigation</h2>
+      <h1>🛡️ CLINI-Q Clinical Trial SOP Assistant 🛡️</h1>
+      <h2>💡 Smart Assistant for Clinical Trial SOP Navigation</h2>
       <p>
         I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks,
         CLINI-Q helps research teams navigate essential documentation, regulatory requirements, and
@@ -205,51 +206,72 @@ st.markdown(
 )
 st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
 
+# Disclaimer just below like the example
 st.caption(DISCLAIMER)
 
-with st.sidebar:
-    st.header("User Setup")
-    role = st.selectbox("Your role", list(ROLES.keys()))
-    scenario = st.selectbox("Common scenarios", DEFAULT_SCENARIOS)
-    custom = st.text_area("…or describe your scenario", placeholder="Describe your procedural question…", height=100)
-    query = custom.strip() or scenario
-    k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
-    st.divider()
-    st.subheader("Data & Keys")
-    st.write("Place SOP files (.txt/.pdf) in `data/sops`. On Streamlit Cloud, upload via repo.")
-    st.write("Set `OPENAI_API_KEY` in Streamlit Secrets for LLM drafting (optional).")
+# ---------- Primary input block (RISe-style) ----------
+st.markdown('<div class="label">📎 Upload a file for reference (optional)</div>', unsafe_allow_html=True)
+uploaded = st.file_uploader("Drag and drop file here", type=["pdf", "docx", "txt"], label_visibility="collapsed")
+st.markdown('<div class="hint">Limit 200MB per file • PDF, DOCX, TXT</div>', unsafe_allow_html=True)
 
+# categories inferred from filenames; fallback to "All Categories"
 docs = load_documents(DATA_DIR)
 vectorizer, matrix, sources, corpus = build_index(docs)
+categories = ["All Categories"] + sorted({Path(s).stem.split("_")[0].title() for s in sources})
+st.markdown('<div class="label">📁 Select a category:</div>', unsafe_allow_html=True)
+category = st.selectbox("", options=categories, label_visibility="collapsed")
 
-st.subheader("Search evidence from SOPs")
-st.write("Query:", query)
-snippets = retrieve(query, vectorizer, matrix, sources, corpus, k=k)
+st.markdown('<div class="label">💬 What would you like me to help you with?</div>', unsafe_allow_html=True)
+user_text = st.text_area("", placeholder="Type your question...", height=80, label_visibility="collapsed")
 
-if snippets:
-    for i, s in enumerate(snippets, 1):
-        with st.expander(f"{i}. {s.source}  (relevance {s.score:.2f})", expanded=(i==1)):
-            st.text(s.text[:2000] if s.text else "(no text)")
-else:
-    st.info("No SOP files found. Add .txt or .pdf files under `data/sops`.")
+st.markdown('<div class="label">💡 Try asking one of these:</div>', unsafe_allow_html=True)
+c1, c2, c3, c4 = st.columns(4)
+suggestions = DEFAULT_SCENARIOS
+with c1:
+    if st.button(suggestions[0]): user_text = suggestions[0]
+with c2:
+    if st.button(suggestions[1]): user_text = suggestions[1]
+with c3:
+    if st.button(suggestions[2]): user_text = suggestions[2]
+with c4:
+    if st.button(suggestions[3]): user_text = suggestions[3]
 
 st.divider()
-if st.button("Generate CLINI-Q Guidance", type="primary"):
-    plan = generate_guidance(role, query, snippets)
+
+# ---------- Guidance + evidence ----------
+left, right = st.columns([1, 2])
+
+with left:
+    st.header("Setup")
+    role = st.selectbox("Your role", list(ROLES.keys()), index=0)
+    k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
+    go = st.button("Generate CLINI-Q Guidance", type="primary")
+
+with right:
+    if user_text:
+        st.subheader("Query")
+        st.write(user_text)
+
+if go and user_text:
+    # Optionally do something with uploaded file (not indexed into corpus in this MVP)
+    snippets = retrieve(user_text, vectorizer, matrix, sources, corpus, k=k)
+    plan = generate_guidance(role, user_text, snippets)
     st.success("Draft guidance generated.")
+
     st.markdown("### Step-by-step guidance")
     for i, step in enumerate(plan.get("steps", []), 1):
         st.markdown(f"**{i}.** {step}")
+
     if plan.get("citations"):
         st.markdown("### Citations")
         st.write("; ".join(plan["citations"]))
+
     if plan.get("compliance"):
         st.markdown("### Compliance Reminders")
         for item in plan["compliance"]:
             st.markdown(f"- {item}")
+
     st.markdown(f"> {plan.get('disclaimer', '')}")
-else:
-    st.info("Adjust your scenario and click **Generate CLINI-Q Guidance**.")
 
 st.divider()
 st.caption("MVP scope: No medical advice. No PHI/PII. Not a submission tool. Always verify locally.")
