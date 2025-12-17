@@ -399,23 +399,7 @@ def main():
                 st.session_state["clear_input"] = True
                 st.rerun()
 
-    # ----- SOP Retrieval & Guidance -----
-    st.divider()
-    docs = load_documents(DATA_DIR)
-    vectorizer, matrix, sources, corpus = build_index(docs)
-
-    sop_query = build_query(ROLES[role_label], scenario, answers)
-    st.subheader("🔎 Search evidence from SOPs")
-    st.write("Query:", sop_query)
-
-    snippets = retrieve(sop_query, vectorizer, matrix, sources, corpus, k=k)
-    if snippets:
-        for i, s in enumerate(snippets, 1):
-            with st.expander(f"{i}. {s.source}  (relevance {s.score:.2f})", expanded=(i == 1)):
-                st.text(s.text if s.text else "(no text)")
-    else:
-        st.info("No SOP files found. Add .txt or .pdf files under `data/sops`.")
-
+    # ----- SOP Guidance -----
     st.divider()
     if st.button("Generate CLINI-Q Guidance", type="primary"):
         plan = compose_guidance(role_label, scenario, answers, snippets)
