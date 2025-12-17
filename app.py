@@ -181,8 +181,9 @@ st.markdown(
 )
 
 # Big centered logo at top
-left = st.columns([1, 2, 1])[1]
-with center:
+# Big left-aligned logo at top
+left_col = st.columns([2, 1, 1])[0]   # pick the FIRST column (index 0)
+with left_col:
     st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), use_column_width=True)
 
 # Title + subtitle + description 
