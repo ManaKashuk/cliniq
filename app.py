@@ -181,11 +181,11 @@ st.markdown(
 )
 
 # Big centered logo at top
-center = st.columns([1, 2, 1])[1]
+left = st.columns([1, 2, 1])[1]
 with center:
     st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), use_column_width=True)
 
-# Title + subtitle + description (exact RISe feel)
+# Title + subtitle + description 
 st.markdown(
     """
     <div class="hero">
