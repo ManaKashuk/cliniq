@@ -10,9 +10,9 @@
 #   structured, role-specific procedural guidance with citations to the retrieved SOPs.
 # - Falls back to a simple, offline "rule-based summary" if no key is provided.
 #
-# Anti-scope guardrails (per roadmap): The app does NOT provide medical advice, does NOT
-# access PHI/PII, and is NOT an automation for IRB/Regulatory submissions. It provides
-# procedural guidance only and reminds users to verify against site SOP and PI.
+# Anti-scope guardrails: The app does NOT provide medical advice, does NOT
+# access PHI/PII, and is NOT an automation for IRB/Regulatory submissions.
+# It provides procedural guidance only and reminds users to verify with site SOP & PI.
 #
 # Deployment: Works on Streamlit Community Cloud. Put OPENAI_API_KEY in Streamlit secrets.
 #
@@ -111,7 +111,6 @@ def build_index(docs: List[Tuple[str, str]]):
     matrix = vectorizer.fit_transform(corpus)
     return vectorizer, matrix, sources, corpus
 
-
 def retrieve(query: str, vectorizer, matrix, sources, corpus, k: int = 5) -> List[Snippet]:
     if not query.strip():
         return []
@@ -189,7 +188,21 @@ def generate_guidance(role: str, scenario: str, snippets: List[Snippet]) -> dict
 
 # ---------------- UI ----------------
 st.set_page_config(page_title="CLINI-Q SOP Navigator", page_icon="🧭", layout="wide")
-st.title("CLINI-Q — Intelligent SOP Navigator (MVP)")
+
+# --- Hero header with logo and description ---
+with st.container():
+    col1, col2 = st.columns([1, 3], vertical_alignment="center")
+    with col1:
+        st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), use_column_width=True)
+    with col2:
+        st.markdown("# CLINI-Q — Smart Assistant for Clinical Trial SOP Navigation")
+        st.markdown(
+            "I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, "
+            "CLINI-Q helps research teams navigate essential documentation, regulatory requirements, and "
+            "Good Clinical Practice (GCP) standards with clarity and confidence."
+        )
+st.divider()
+
 st.caption(DISCLAIMER)
 
 with st.sidebar:
