@@ -1,21 +1,4 @@
-#!/usr/bin/env python3
-# CLINI-Q: Intelligent SOP Navigator (Streamlit MVP)
-# Author: Software Architect GPT
-# License: MIT
-#
-# Summary:
-# - Lets users choose a role (CRC, RN, Admin, Trainee) and describe a scenario.
-# - Retrieves the most relevant SOP snippets from local /data/sops using TF-IDF.
-# - Optionally calls OpenAI (if OPENAI_API_KEY is set in Streamlit secrets) to draft
-#   structured, role-specific procedural guidance with citations to the retrieved SOPs.
-# - Falls back to a simple, offline "rule-based summary" if no key is provided.
-#
-# Anti-scope guardrails: The app does NOT provide medical advice, does NOT
-# access PHI/PII, and is NOT an automation for IRB/Regulatory submissions.
-# It provides procedural guidance only and reminds users to verify with site SOP & PI.
-#
-# Deployment: Works on Streamlit Community Cloud. Put OPENAI_API_KEY in Streamlit secrets.
-#
+
 import os
 import streamlit as st
 from typing import List, Tuple
@@ -195,7 +178,7 @@ with st.container():
     with col1:
         st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), use_column_width=True)
     with col2:
-        st.markdown("# CLINI-Q — Smart Assistant for Clinical Trial SOP Navigation")
+        st.markdown("Smart Assistant for Clinical Trial SOP Navigation")
         st.markdown(
             "I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, "
             "CLINI-Q helps research teams navigate essential documentation, regulatory requirements, and "
