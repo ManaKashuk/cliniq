@@ -270,12 +270,6 @@ def main():
             for q, opts in qdef.items():
                 answers[q] = st.selectbox(q, opts, key=f"q_{q}")
 
-        k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
-        st.divider()
-        st.subheader("Data & Keys")
-        st.write(f"SOP directory: `{DATA_DIR}`")
-        st.write("Optional CSV: `cliniq_faq.csv` (Category, Question, Answer).")
-
     # Reset chat on category change
     if st.session_state["last_category"] != category:
         st.session_state["chat"] = []
