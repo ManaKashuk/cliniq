@@ -182,7 +182,7 @@ st.markdown(
 # Big left-aligned logo at top
 left_col = st.columns([2, 1, 1])[0]   # use the FIRST column
 with left_col:
-    st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), width=420)
+    st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), width=800)
 
 
 # --- Styles (update .hero to be left-aligned) ---
