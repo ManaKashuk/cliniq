@@ -1,33 +1,27 @@
 import os
-import streamlit as st
-from typing import List, Tuple
 from pathlib import Path
 from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
 
-# Retrieval
+import streamlit as st
+from pypdf import PdfReader
+
+# Retrieval (TF-IDF default; OpenAI Embeddings optional)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# PDF/Text parsing
-from pypdf import PdfReader
-
-# Optional OpenAI usage
-USE_OPENAI = False
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-client = None
-try:
-    api_key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
-    if not api_key:
-        api_key = os.environ.get("OPENAI_API_KEY", None)
-    if api_key:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        USE_OPENAI = True
-except Exception:
-    USE_OPENAI = False
-
+# --------- Global Config ---------
+APP_TITLE = "CLINI-Q • Role-based SOP Guidance"
 DATA_DIR = Path(__file__).parent / "data" / "sops"
 
+# Behavior / compliance constants
+DISCLAIMER = (
+    "This tool provides procedural guidance only. Do not use for clinical decisions or PHI. "
+    "Always verify with your site SOPs and Principal Investigator (PI)."
+)
+FINAL_VERIFICATION_LINE = "Verify with your site SOP and PI before execution."
+
+# Role map + short codes (unchanged keys for compatibility)
 ROLES = {
     "Clinical Research Coordinator (CRC)": "CRC",
     "Registered Nurse (RN)": "RN",
@@ -35,112 +29,243 @@ ROLES = {
     "Trainee": "TRAINEE",
 }
 
-DEFAULT_SCENARIOS = [
-    "How do I document an adverse event (AE) for a subject?",
-    "What steps are required before dosing an investigational product (IP)?",
-    "How do I manage delegation logs for new team members?",
-    "What is the procedure to report a protocol deviation?",
-]
+# Role-scoped scenario catalog
+ROLE_SCENARIOS: Dict[str, List[str]] = {
+    "CRC": [
+        "IP shipment",
+        "Missed visit",
+        "Adverse event (AE) reporting",
+        "Protocol deviation",
+        "Monitoring visit preparation",
+    ],
+    "RN": [
+        "Pre-dose checks for IP",
+        "AE identification and documentation",
+        "Unblinding contingency",
+        "Concomitant medication documentation",
+    ],
+    "ADMIN": [
+        "Delegation log management",
+        "Regulatory binder maintenance",
+        "Safety report distribution",
+        "IRB submission packet assembly",
+    ],
+    "TRAINEE": [
+        "SOP basics: GCP overview",
+        "Site initiation: required logs",
+        "Source documentation fundamentals",
+    ],
+}
 
-DISCLAIMER = (
-    "This tool provides procedural guidance only. Verify against your site SOPs and Principal "
-    "Investigator (PI) instructions before execution. Do not use this tool for clinical decisions "
-    "or to handle protected health information."
-)
+# Scenario → Clarifying questions (role-agnostic where possible)
+CLARIFYING_QUESTIONS: Dict[str, List[Dict[str, List[str]]]] = {
+    "IP shipment": [
+        {"Shipment type?": ["Initial shipment", "Resupply", "Return/destruction"]},
+        {"Temperature control?": ["Ambient", "Refrigerated (2–8°C)", "Frozen (≤ -20°C)"]},
+        {"Chain of custody ready?": ["Yes", "No"]},
+    ],
+    "Missed visit": [
+        {"Visit window status?": ["Within window", "Outside window"]},
+        {"Reason documented?": ["Yes", "No"]},
+        {"Make-up allowed by protocol?": ["Yes", "No", "Unclear"]},
+    ],
+    "Adverse event (AE) reporting": [
+        {"AE seriousness?": ["Non-serious", "Serious (SAE)"]},
+        {"Related to IP?": ["Related", "Not related", "Unknown"]},
+        {"Expectedness (per IB)?": ["Expected", "Unexpected", "Unknown"]},
+    ],
+    "Protocol deviation": [
+        {"Deviation type?": ["Minor", "Major"]},
+        {"Discovered by?": ["Self-identified", "Monitor", "Sponsor", "IRB", "Other"]},
+        {"Subject safety impacted?": ["Yes", "No", "Unknown"]},
+    ],
+    "Monitoring visit preparation": [
+        {"Visit type?": ["SIV", "IMV", "COV"]},
+        {"Remote or on-site?": ["Remote", "On-site"]},
+        {"Pre-visit docs prepared?": ["Yes", "No"]},
+    ],
+    "Pre-dose checks for IP": [
+        {"Dosing day?": ["Screening", "Baseline", "Treatment day", "Other"]},
+        {"Pre-dose labs within window?": ["Yes", "No", "Unknown"]},
+        {"Eligibility confirmed?": ["Yes", "No", "Pending PI sign-off"]},
+    ],
+    "Delegation log management": [
+        {"New team member?": ["Yes", "No"]},
+        {"Training complete?": ["Yes", "No", "In progress"]},
+        {"Signature captured?": ["Wet ink", "eSign", "Not captured"]},
+    ],
+    "SOP basics: GCP overview": [
+        {"Prior experience?": ["None", "<1 year", "1–3 years", "3+ years"]},
+    ],
+}
 
-# ---------------- Data classes & helpers ----------------
+# Output keys: Steps, Required Docs, Escalation, SOP Citations, Compliance
+OUTPUT_KEYS = ["steps", "required_docs", "escalations", "citations", "compliance", "disclaimer"]
+
+# --------- Optional OpenAI (embeddings + LLM drafting) ---------
+USE_OPENAI = False
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_EMBED_MODEL = os.environ.get("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+client = None
+try:
+    api_key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        USE_OPENAI = True
+except Exception:
+    USE_OPENAI = False  # Falls back gracefully
+
+# --------- Types ---------
 @dataclass
 class Snippet:
     text: str
     source: str
     score: float
+    section_hint: Optional[str] = None  # why: helps show SOP section when available
 
+# --------- Data loading ---------
 @st.cache_data(show_spinner=False)
 def load_documents(data_dir: Path) -> List[Tuple[str, str]]:
-    """Return list of (source, text) tuples from .txt and .pdf files."""
-    docs = []
+    docs: List[Tuple[str, str]] = []
     for p in sorted(data_dir.glob("**/*")):
         if p.suffix.lower() == ".txt":
             try:
-                docs.append((str(p.name), p.read_text(encoding="utf-8", errors="ignore")))
+                docs.append((p.name, p.read_text(encoding="utf-8", errors="ignore")))
             except Exception:
                 pass
         elif p.suffix.lower() == ".pdf":
             try:
                 reader = PdfReader(str(p))
                 pages = [page.extract_text() or "" for page in reader.pages]
-                text = "\n".join(pages)
-                docs.append((str(p.name), text))
+                docs.append((p.name, "\n".join(pages)))
             except Exception:
                 pass
+    if not docs:
+        docs = [("placeholder.txt", "No SOP files found. Add .txt/.pdf under data/sops.")]
     return docs
 
+# --------- Indexes (TF-IDF and optional embeddings) ---------
 @st.cache_data(show_spinner=False)
-def build_index(docs: List[Tuple[str, str]]):
-    """Build and cache a TF-IDF index."""
+def build_tfidf_index(docs: List[Tuple[str, str]]):
     sources = [d[0] for d in docs]
     corpus = [d[1] for d in docs]
-    if not corpus:
-        corpus = ["placeholder text for empty corpus"]
-        sources = ["placeholder.txt"]
-    # Safe params for tiny corpora to avoid max_df/min_df conflicts
-    n_docs = len(corpus)
-    if n_docs < 2:
-        vectorizer = TfidfVectorizer(stop_words="english", min_df=1, max_df=1.0)
-    else:
-        vectorizer = TfidfVectorizer(stop_words="english", min_df=1, max_df=0.95)
+    n_docs = max(1, len(corpus))
+    vectorizer = TfidfVectorizer(stop_words="english", min_df=1, max_df=(0.95 if n_docs > 1 else 1.0))
     matrix = vectorizer.fit_transform(corpus)
     return vectorizer, matrix, sources, corpus
 
-def retrieve(query: str, vectorizer, matrix, sources, corpus, k: int = 5) -> List[Snippet]:
+@st.cache_data(show_spinner=False)
+def embed_corpus_openai(docs: List[Tuple[str, str]]):
+    # why: keep memory/time bounded by embedding whole-document granularity
+    if not USE_OPENAI or not client:
+        return None
+    sources = [d[0] for d in docs]
+    corpus = [d[1] for d in docs]
+    try:
+        resp = client.embeddings.create(model=OPENAI_EMBED_MODEL, input=corpus)
+        embs = [d.embedding for d in resp.data]
+        return embs, sources, corpus
+    except Exception:
+        return None
+
+def retrieve(query: str, tfidf, tfidf_matrix, sources, corpus, k: int = 5,
+             openai_embs=None) -> List[Snippet]:
     if not query.strip():
         return []
-    q_vec = vectorizer.transform([query])
-    sims = cosine_similarity(q_vec, matrix).ravel()
+    if openai_embs is not None and USE_OPENAI and client:
+        try:
+            q_emb = client.embeddings.create(model=OPENAI_EMBED_MODEL, input=[query]).data[0].embedding
+            # simple cosine sim
+            import numpy as np
+            A = np.array(openai_embs)
+            q = np.array(q_emb)
+            sims = (A @ q) / (np.linalg.norm(A, axis=1) * (np.linalg.norm(q) + 1e-9) + 1e-9)
+            idxs = sims.argsort()[::-1][:k]
+            return [Snippet(text=corpus[i][:2000], source=sources[i], score=float(sims[i])) for i in idxs]
+        except Exception:
+            pass  # fall back to TF-IDF
+    q_vec = tfidf.transform([query])
+    sims = cosine_similarity(q_vec, tfidf_matrix).ravel()
     idxs = sims.argsort()[::-1][:k]
     return [Snippet(text=corpus[i][:2000], source=sources[i], score=float(sims[i])) for i in idxs]
 
-def draft_prompt(role: str, scenario: str, snippets: List[Snippet]) -> str:
+# --------- Prompting / Generation ---------
+def build_query(role_code: str, scenario: str, answers: Dict[str, str]) -> str:
+    # why: query expansion to bias retrieval towards role/scenario terms found in SOPs
+    terms = [role_code, scenario]
+    for q, a in answers.items():
+        terms.extend([q, a])
+    hint = " ".join(terms)
+    return f"{scenario} {role_code} {hint} SOP section responsibilities documentation reporting"
+
+def draft_prompt(role_label: str, scenario: str, answers: Dict[str, str], snippets: List[Snippet]) -> str:
     context_blocks = "\n\n".join([f"[Source: {s.source}]\n{s.text}" for s in snippets])
-    role_short = ROLES.get(role, role)
-    prompt = f"""You are CLINI-Q, an intelligent SOP navigator for clinical research operations.
+    role_short = ROLES.get(role_label, role_label)
+    clarifiers = "; ".join([f"{k}={v}" for k, v in answers.items()]) if answers else "None"
+    return f"""
+You are CLINI-Q, a compliance-first SOP navigator for clinical research.
+Rules:
+- Never give medical advice.
+- Ask clarifying questions before answering.
+- Always cite SOP section/source for each step.
+- Keep concise; end with: '{FINAL_VERIFICATION_LINE}'
+
 User role: {role_short}
-User scenario/question: {scenario}
+Scenario: {scenario}
+Clarifying answers: {clarifiers}
 
 Context (SOP snippets):
 {context_blocks}
 
-Write a step-by-step, role-specific procedural guidance (numbered steps). For each key step, cite the relevant [Source: …].
-Include a short 'Compliance Reminders' list after the steps.
-Never give medical advice. Always end with: 'Verify against site SOP and PI instructions before execution.'
-Return JSON with keys: steps (list of strings), citations (list of 'Source: file.pdf' strings), compliance (list of strings), disclaimer (string)."""
-    return prompt
+Return JSON with keys:
+- steps (list[str])
+- required_docs (list[str])
+- escalations (list[str])
+- citations (list[str] like 'Source: filename.pdf')
+- compliance (list[str])
+- disclaimer (string)
+"""
 
-def offline_plan(role: str, scenario: str, snippets: List[Snippet]) -> dict:
+def offline_compose(role_label: str, scenario: str, answers: Dict[str, str], snippets: List[Snippet]) -> dict:
+    # Deterministic structure matching MVP spec
+    role_short = ROLES.get(role_label, role_label)
+    cite_list = sorted({f"Source: {s.source}" for s in snippets})
     steps = [
-        f"Confirm scope for {role} and locate applicable SOP section(s).",
-        "Review inclusion/exclusion criteria and protocol requirements relevant to the scenario.",
-        "Follow site-required documentation sequence (forms/logs) as referenced in cited sources.",
-        "Record actions with date/time, signer, and cross-references in the source record.",
-        "Escalate uncertainties to PI/clinical lead; document clarifications."
+        f"Confirm {role_short} responsibilities for '{scenario}' using cited SOP sections.",
+        "Identify protocol windows/criteria impacted based on clarifying details provided.",
+        "Follow site-required documentation order; complete forms/logs referenced in citations.",
+        "Record actions with date/time, signer, and cross-references in source records.",
+        "Escalate uncertainties to PI/medical lead and document guidance.",
     ]
-    citations = sorted({f"Source: {s.source}" for s in snippets})
+    required_docs = [
+        "Source notes capturing who/what/when/why.",
+        "Role-specific log(s) (e.g., delegation, accountability, AE/SAE form).",
+        "Correspondence record (e.g., email to sponsor/CRO/IRB) if applicable.",
+    ]
+    escalations = [
+        "Potential subject safety impact.",
+        "Regulatory/IRB reporting thresholds met or unclear.",
+        "Protocol-required timelines at risk (e.g., SAE 24-hour reporting).",
+    ]
     compliance = [
-        "Adhere to ICH-GCP E6(R2) principles.",
-        "Use site-approved templates and logs.",
-        "Do not enter PHI into this tool; maintain confidentiality.",
+        "Adhere to ICH-GCP E6(R2) and site SOPs.",
+        "Use site-approved templates; maintain confidentiality (no PHI in this tool).",
+        "Cite SOP section(s) in source; retain chain of custody where relevant.",
     ]
     return {
         "steps": steps,
-        "citations": list(citations),
+        "required_docs": required_docs,
+        "escalations": escalations,
+        "citations": cite_list,
         "compliance": compliance,
-        "disclaimer": "Verify against site SOP and PI instructions before execution.",
+        "disclaimer": FINAL_VERIFICATION_LINE,
     }
 
-def generate_guidance(role: str, scenario: str, snippets: List[Snippet]) -> dict:
+def generate_guidance(role_label: str, scenario: str, answers: Dict[str, str], snippets: List[Snippet]) -> dict:
     if USE_OPENAI and client:
-        prompt = draft_prompt(role, scenario, snippets)
         try:
+            prompt = draft_prompt(role_label, scenario, answers, snippets)
             resp = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
@@ -151,119 +276,232 @@ def generate_guidance(role: str, scenario: str, snippets: List[Snippet]) -> dict
             )
             content = resp.choices[0].message.content
             import json
-            try:
-                data = json.loads(content)
-            except Exception:
-                data = {"steps": [content], "citations": [s.source for s in snippets], "compliance": [],
-                        "disclaimer": "Verify against site SOP and PI instructions before execution."}
+            data = json.loads(content)
+            # minimal schema sanitation
+            for k in OUTPUT_KEYS:
+                data.setdefault(k, [] if k not in ["disclaimer"] else FINAL_VERIFICATION_LINE)
             return data
-        except Exception as e:
-            st.warning(f"OpenAI call failed; running in offline mode. ({e})")
-            return offline_plan(role, scenario, snippets)
-    else:
-        return offline_plan(role, scenario, snippets)
+        except Exception:
+            return offline_compose(role_label, scenario, answers, snippets)
+    return offline_compose(role_label, scenario, answers, snippets)
 
-# ---------------- UI ----------------
+# --------- Export helpers ---------
+def to_markdown(role_label: str, scenario: str, answers: Dict[str, str], plan: dict) -> str:
+    def bullet(items: List[str]) -> str:
+        return "\n".join([f"- {x}" for x in items]) if items else "-"
+    md = []
+    md.append(f"# CLINI-Q Guidance\n")
+    md.append(f"**Role:** {ROLES.get(role_label, role_label)}  \n**Scenario:** {scenario}")
+    if answers:
+        md.append("**Clarifying Answers:**  " + "; ".join([f"{k}: {v}" for k, v in answers.items()]))
+    md.append("\n## Steps")
+    md.extend([f"{i+1}. {s}" for i, s in enumerate(plan.get('steps', []))])
+    md.append("\n## Required Documentation")
+    md.append(bullet(plan.get("required_docs", [])))
+    md.append("\n## Escalation Triggers")
+    md.append(bullet(plan.get("escalations", [])))
+    md.append("\n## SOP Citations")
+    md.append(bullet(plan.get("citations", [])))
+    md.append("\n## Compliance Reminder")
+    md.append(bullet(plan.get("compliance", [])))
+    md.append(f"\n> {plan.get('disclaimer', FINAL_VERIFICATION_LINE)}")
+    return "\n".join(md)
+
+def to_pdf_bytes(markdown_text: str) -> Optional[bytes]:
+    # Try reportlab; if unavailable, return None (we’ll fall back to Markdown download).
+    try:
+        from reportlab.lib.pagesizes import LETTER
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.units import inch
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+
+        import io
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=LETTER)
+        width, height = LETTER
+        left = 0.75 * inch
+        right = 0.75 * inch
+        top = height - 0.75 * inch
+        line_height = 12
+        x = left
+        y = top
+
+        for raw_line in markdown_text.split("\n"):
+            line = raw_line.replace("\t", "    ")
+            # naive wrap
+            max_width = width - left - right
+            words = line.split(" ")
+            cur = ""
+            for w in words:
+                test = (cur + " " + w).strip()
+                if stringWidth(test, "Helvetica", 10) <= max_width:
+                    cur = test
+                else:
+                    c.setFont("Helvetica", 10)
+                    c.drawString(x, y, cur)
+                    y -= line_height
+                    if y < 0.75 * inch:
+                        c.showPage()
+                        y = top
+                    cur = w
+            c.setFont("Helvetica", 10)
+            c.drawString(x, y, cur)
+            y -= line_height
+            if y < 0.75 * inch:
+                c.showPage()
+                y = top
+
+        c.save()
+        pdf = buf.getvalue()
+        buf.close()
+        return pdf
+    except Exception:
+        return None
+
+# --------- UI ---------
 st.set_page_config(page_title="CLINI-Q SOP Navigator", page_icon="🧭", layout="wide")
 
+# Header
 st.markdown(
     """
     <style>
-      .hero { text-align: center; margin-top: .3rem; }
-      .hero h1 { font-size: 2.2rem; font-weight: 800; margin: .2rem 0 .25rem; }
-      .hero h2 { font-size: 1.1rem; font-weight: 700; font-style: italic; margin: .1rem 0 .6rem; }
-      .hero p  { font-size: 1rem; color:#333; max-width: 950px; margin: 0 auto .8rem; }
-      .divider-strong { border-top: 4px solid #222; margin: .2rem 0 1.0rem; }
+      .hero { text-align: left; margin-top: .4rem; }
+      .hero h1 { font-size: 1.9rem; font-weight: 800; margin: .2rem 0 .25rem; }
+      .hero p  { font-size: 0.95rem; color:#333; max-width: 980px; margin: 0 0 .6rem 0; }
+      .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 0.8rem 1rem; background: #fff; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Big left-aligned logo at top
-left_col = st.columns([2, 1, 1])[0]   # use the FIRST column
-with left_col:
-    st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), width=800)
-
-
-# --- Styles (update .hero to be left-aligned) ---
-st.markdown(
-    """
-    <style>
-      .hero { text-align: left; margin-top: .3rem; }
-      .hero h1 { font-size: 2.2rem; font-weight: 800; margin: .2rem 0 .25rem; }
-      .hero h2 { font-size: 1.1rem; font-weight: 700; font-style: italic; margin: .1rem 0 .6rem; }
-      .hero p  { font-size: 1rem; color:#333; max-width: 950px; margin: 0 0 .8rem 0; }
-      .divider-strong { border-top: 4px solid #222; margin: .2rem 0 1.0rem; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# --- Left-aligned title, subtitle, and paragraph ---
 st.markdown(
     """
     <div class="hero">
-      <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
-      <p>
-        I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks,
-        helping research teams navigate essential documentation, regulatory requirements, and
-        Good Clinical Practice (GCP) standards with clarity and confidence.
-      </p>
+      <h1>💡 CLINI-Q — Role-based SOP Guidance</h1>
+      <p>Fast, compliant, role-specific guidance mapped from SOPs. Role → Scenario → Clarifying Questions → SOP snippets → Structured steps with citations.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
-
-st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
-
-# Keep the disclaimer where it was
 st.caption(DISCLAIMER)
+st.divider()
 
-# ===== Sidebar (unchanged) =====
+# Sidebar: Role → Scenario → Clarifying Questions
 with st.sidebar:
     st.header("User Setup")
-    role = st.selectbox("Your role", list(ROLES.keys()))
-    scenario = st.selectbox("Common scenarios", DEFAULT_SCENARIOS)
-    custom = st.text_area("…or describe your scenario", placeholder="Describe your procedural question…", height=100)
-    query = custom.strip() or scenario
-    k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
+    role_label = st.selectbox("Select your role", list(ROLES.keys()))
+    role_code = ROLES[role_label]
+    scenario_list = ROLE_SCENARIOS.get(role_code, [])
+    scenario = st.selectbox("Select scenario", scenario_list)
+    st.subheader("Clarifying questions")
+    answers: Dict[str, str] = {}
+    for qdef in CLARIFYING_QUESTIONS.get(scenario, []):
+        for q, opts in qdef.items():
+            answers[q] = st.selectbox(q, opts, key=f"q_{q}")
+
     st.divider()
+    k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
     st.subheader("Data & Keys")
-    st.write("Place SOP files (.txt/.pdf) in `data/sops`. On Streamlit Cloud, upload via repo.")
-    st.write("Set `OPENAI_API_KEY` in Streamlit Secrets for LLM drafting (optional).")
+    st.write("SOP files: place .txt/.pdf in `data/sops` (repo or mounted volume).")
+    if USE_OPENAI:
+        st.success("OpenAI enabled (LLM + embeddings).")
+    else:
+        st.info("OpenAI disabled — using TF-IDF retrieval and offline composer.")
 
-# ===== Main flow (unchanged) =====
+# Load corpus + indexes
 docs = load_documents(DATA_DIR)
-vectorizer, matrix, sources, corpus = build_index(docs)
+tfidf, tfidf_matrix, sources, corpus = build_tfidf_index(docs)
+openai_embs_pack = embed_corpus_openai(docs) if USE_OPENAI else None
+openai_embs = openai_embs_pack[0] if openai_embs_pack else None
 
+# Search intent & retrieval
+query = build_query(role_code, scenario, answers)
 st.subheader("Search evidence from SOPs")
 st.write("Query:", query)
-snippets = retrieve(query, vectorizer, matrix, sources, corpus, k=k)
+
+snippets = retrieve(query, tfidf, tfidf_matrix, sources, corpus, k=k, openai_embs=openai_embs)
 
 if snippets:
     for i, s in enumerate(snippets, 1):
-        with st.expander(f"{i}. {s.source}  (relevance {s.score:.2f})", expanded=(i==1)):
-            st.text(s.text[:2000] if s.text else "(no text)")
+        with st.expander(f"{i}. {s.source}  (relevance {s.score:.2f})", expanded=(i == 1)):
+            st.text(s.text if s.text else "(no text)")
 else:
     st.info("No SOP files found. Add .txt or .pdf files under `data/sops`.")
 
 st.divider()
-if st.button("Generate CLINI-Q Guidance", type="primary"):
-    plan = generate_guidance(role, query, snippets)
+
+# Guidance generation
+col_btn, col_export = st.columns([1, 1])
+with col_btn:
+    generate = st.button("Generate CLINI-Q Guidance", type="primary")
+with col_export:
+    export_clicked = st.button("Export (PDF / Markdown)")
+
+if generate:
+    plan = generate_guidance(role_label, scenario, answers, snippets)
+    # Output cards
     st.success("Draft guidance generated.")
-    st.markdown("### Step-by-step guidance")
-    for i, step in enumerate(plan.get("steps", []), 1):
-        st.markdown(f"**{i}.** {step}")
-    if plan.get("citations"):
-        st.markdown("### Citations")
-        st.write("; ".join(plan["citations"]))
-    if plan.get("compliance"):
-        st.markdown("### Compliance Reminders")
-        for item in plan["compliance"]:
-            st.markdown(f"- {item}")
-    st.markdown(f"> {plan.get('disclaimer', '')}")
-else:
-    st.info("Adjust your scenario and click **Generate CLINI-Q Guidance**.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("### Steps")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        for i, step in enumerate(plan.get("steps", []), 1):
+            st.markdown(f"**{i}.** {step}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("### Required Documentation")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        for d in plan.get("required_docs", []):
+            st.markdown(f"- {d}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with c2:
+        st.markdown("### Escalation Triggers")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        for e in plan.get("escalations", []):
+            st.markdown(f"- {e}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("### SOP Citations")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.write("; ".join(plan.get("citations", [])) or "-")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("### Compliance Reminder")
+    for item in plan.get("compliance", []):
+        st.markdown(f"- {item}")
+
+    st.markdown(f"> {plan.get('disclaimer', FINAL_VERIFICATION_LINE)}")
+
+    st.session_state["last_plan"] = plan
+    st.session_state["last_context"] = {
+        "role_label": role_label,
+        "scenario": scenario,
+        "answers": answers,
+    }
+
+# Export
+if export_clicked:
+    last_plan = st.session_state.get("last_plan")
+    meta = st.session_state.get("last_context")
+    if not last_plan or not meta:
+        st.warning("Generate guidance first, then export.")
+    else:
+        md = to_markdown(meta["role_label"], meta["scenario"], meta["answers"], last_plan)
+        pdf_bytes = to_pdf_bytes(md)
+        if pdf_bytes:
+            st.download_button(
+                "Download PDF",
+                data=pdf_bytes,
+                file_name="cliniq_guidance.pdf",
+                mime="application/pdf",
+            )
+        st.download_button(
+            "Download Markdown",
+            data=md.encode("utf-8"),
+            file_name="cliniq_guidance.md",
+            mime="text/markdown",
+        )
 
 st.divider()
 st.caption("MVP scope: No medical advice. No PHI/PII. Not a submission tool. Always verify locally.")
