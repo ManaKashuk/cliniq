@@ -206,38 +206,38 @@ def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], sn
 
 # ------------------ APP (MSU-style flow with ICON) ------------------
 def main():
-    st.set_page_config(page_title=APP_TITLE, page_icon=_load_page_icon(), layout="wide")
+    st.set_page_config(page_title=APP_TITLE, page_icon="🧭", layout="wide")
 
-    icon_b64 = _img_to_b64(ICON_PATH)  # used for header + chat bubble
-    logo_b64 = _img_to_b64(LOGO_PATH) or icon_b64
+    logo_b64 = _img_to_b64(LOGO_PATH)
+    chat_b64 = _img_to_b64(CHAT_AVATAR_PATH) or logo_b64
 
-    # Header with icon (MSU-style left alignment)
-    st.markdown(
-        """
-        <style>
-          .hero-wrap { display:flex; align-items:center; gap:14px; margin:.3rem 0 .2rem 0; }
-          .hero h1 { font-size:2.05rem; font-weight:800; margin:0; }
-          .hero p  { font-size:1rem; color:#333; max-width:980px; margin:.25rem 0 0 0; }
-          .divider-strong { border-top:4px solid #222; margin:.4rem 0 1.0rem; }
-          .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"""
-        <div class="hero-wrap">
-            <img src="data:image/png;base64,{(logo_b64 or icon_b64)}" style="height:64px;border-radius:12px;"/>
+    lh, rh = st.columns([3, 1])
+    with lh:
+        if LOGO_PATH.exists():
+            st.image(LOGO_PATH.as_posix(), use_column_width=True)
+        st.markdown(
+            """
+            <style>
+              .hero { text-align:left; margin-top:.3rem; }
+              .hero h1 { font-size:2.1rem; font-weight:800; margin:.2rem 0 .25rem; }
+              .hero p  { font-size:1rem; color:#333; max-width:950px; margin:0 0 .6rem 0; }
+              .divider-strong { border-top:4px solid #222; margin:.2rem 0 1rem; }
+              .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            """
             <div class="hero">
-                <h1>CLINI-Q — Smart Assistant for Clinical Trial SOP Navigation</h1>
-                <p>I map Role → Scenario → Clarifying Questions → SOP snippets → Structured steps with citations.</p>
+              <h1>💡 CLINI-Q — Smart Assistant for Clinical Trial SOP Navigation</h1>
+              <p>I map Role → Scenario → Clarifying Questions → SOP snippets → Structured steps with citations.</p>
             </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
-    st.caption(DISCLAIMER)
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
+        st.caption(DISCLAIMER)
 
     # Upload hint (visual parity with MSU)
     uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
