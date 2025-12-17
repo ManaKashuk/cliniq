@@ -206,7 +206,7 @@ st.markdown(
       <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
       <p>
         I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks,
-        CLINI-Q helps research teams navigate essential documentation, regulatory requirements, and
+        helping research teams navigate essential documentation, regulatory requirements, and
         Good Clinical Practice (GCP) standards with clarity and confidence.
       </p>
     </div>
