@@ -211,8 +211,8 @@ def main():
     st.markdown(
         """
         <style>
-          .hero-wrap { display:flex; align-items:center; gap:14px; margin:.3rem 0 .2rem 0; }
-          .hero h1 { font-size:2.05rem; font-weight:1800; margin:0; }
+          .hero { text-align:left; margin-top:.1rem; }
+          .hero h1 { font-size:2.05rem; font-weight:800; margin:0; }
           .hero p  { font-size:1rem; color:#333; max-width:980px; margin:.25rem 0 0 0; }
           .divider-strong { border-top:4px solid #222; margin:.4rem 0 1.0rem; }
           .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
@@ -226,7 +226,7 @@ def main():
             <img src="data:image/png;base64,{(logo_b64 or icon_b64)}" style="height:64px;border-radius:12px;"/>
             <div class="hero">
                 <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
-                <p>"I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, helping research teams navigate essential documentation, regulatory requirements, and "
+                <p>I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, helping research teams navigate essential documentation, regulatory requirements, and "
             "Good Clinical Practice (GCP) standards with clarity and confidence."</p>
             </div>
         </div>
