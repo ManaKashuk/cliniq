@@ -1,5 +1,6 @@
 # app.py
 # CLINI-Q — MSU RISe–style Q&A + Role/Scenario SOP Navigator
+# Icon-enabled (page icon, chat avatar, header logo)
 
 import os
 import base64
@@ -20,13 +21,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 # ------------------ CONFIG ------------------
 APP_TITLE = "CLINI-Q • SOP Navigator"
 ASSETS_DIR = Path(__file__).parent / "assets"
-LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"            # optional
-CHAT_AVATAR_PATH = ASSETS_DIR / "chat.png"            # optional
+ICON_PATH = ASSETS_DIR / "icon.png"                  # <-- put your icon here (used everywhere)
+LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"           # optional wide header logo (falls back to icon)
+FAQ_CSV   = Path(__file__).parent / "cliniq_faq.csv" # optional: Category,Question,Answer
 
 DEFAULT_SOP_DIR = Path(__file__).parent / "data" / "sops"
 DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
-
-FAQ_CSV = Path(__file__).parent / "cliniq_faq.csv"    # optional: Category,Question,Answer
 
 DISCLAIMER = (
     "This tool provides procedural guidance only. Do not use for clinical decisions or PHI. "
@@ -96,7 +96,7 @@ class Snippet:
     source: str
     score: float
 
-# ------------------ UTILS ------------------
+# ------------------ IMAGE/STYLE HELPERS ------------------
 def _img_to_b64(path: Path) -> str:
     try:
         img = Image.open(path)
@@ -105,6 +105,15 @@ def _img_to_b64(path: Path) -> str:
         return base64.b64encode(buf.getvalue()).decode()
     except Exception:
         return ""
+
+def _load_page_icon():
+    # Use custom icon if present; fallback to emoji to avoid runtime errors
+    try:
+        if ICON_PATH.exists():
+            return Image.open(ICON_PATH)
+    except Exception:
+        pass
+    return "🧭"
 
 def _show_bubble(html: str, avatar_b64: str):
     st.markdown(
@@ -195,42 +204,42 @@ def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], sn
         "disclaimer": FINAL_VERIFICATION_LINE,
     }
 
-# ------------------ APP (MSU-style flow) ------------------
+# ------------------ APP (MSU-style flow with ICON) ------------------
 def main():
-    st.set_page_config(page_title=APP_TITLE, page_icon="🧭", layout="wide")
+    st.set_page_config(page_title=APP_TITLE, page_icon=_load_page_icon(), layout="wide")
 
-    logo_b64 = _img_to_b64(LOGO_PATH)
-    chat_b64 = _img_to_b64(CHAT_AVATAR_PATH) or logo_b64
+    icon_b64 = _img_to_b64(ICON_PATH)  # used for header + chat bubble
+    logo_b64 = _img_to_b64(LOGO_PATH) or icon_b64
 
-    lh, rh = st.columns([3, 1])
-    with lh:
-        if LOGO_PATH.exists():
-            st.image(LOGO_PATH.as_posix(), use_column_width=True)
-        st.markdown(
-            """
-            <style>
-              .hero { text-align:left; margin-top:.3rem; }
-              .hero h1 { font-size:2.1rem; font-weight:800; margin:.2rem 0 .25rem; }
-              .hero p  { font-size:1rem; color:#333; max-width:950px; margin:0 0 .6rem 0; }
-              .divider-strong { border-top:4px solid #222; margin:.2rem 0 1rem; }
-              .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            """
+    # Header with icon (MSU-style left alignment)
+    st.markdown(
+        """
+        <style>
+          .hero-wrap { display:flex; align-items:center; gap:14px; margin:.3rem 0 .2rem 0; }
+          .hero h1 { font-size:2.05rem; font-weight:800; margin:0; }
+          .hero p  { font-size:1rem; color:#333; max-width:980px; margin:.25rem 0 0 0; }
+          .divider-strong { border-top:4px solid #222; margin:.4rem 0 1.0rem; }
+          .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="hero-wrap">
+            <img src="data:image/png;base64,{(logo_b64 or icon_b64)}" style="height:64px;border-radius:12px;"/>
             <div class="hero">
-              <h1>💡 CLINI-Q — Smart Assistant for Clinical Trial SOP Navigation</h1>
-              <p>I map Role → Scenario → Clarifying Questions → SOP snippets → Structured steps with citations.</p>
+                <h1>CLINI-Q — Smart Assistant for Clinical Trial SOP Navigation</h1>
+                <p>I map Role → Scenario → Clarifying Questions → SOP snippets → Structured steps with citations.</p>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
-        st.caption(DISCLAIMER)
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
+    st.caption(DISCLAIMER)
 
-    # Upload (visual hint like MSU)
+    # Upload hint (visual parity with MSU)
     uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
     if uploaded:
         st.success(f"Uploaded file: {uploaded.name}")
@@ -270,7 +279,7 @@ def main():
         st.write(f"SOP directory: `{DATA_DIR}`")
         st.write("Optional CSV: `cliniq_faq.csv` (Category, Question, Answer).")
 
-    # Reset chat on category change (MSU behavior)
+    # Reset chat on category change
     if st.session_state["last_category"] != category:
         st.session_state["chat"] = []
         st.session_state["suggested"] = []
@@ -306,7 +315,7 @@ def main():
                 st.session_state["clear_input"] = True
                 st.rerun()
 
-    # Show chat
+    # Show chat with icon avatar
     st.markdown("<div style='margin-top:10px;'>", unsafe_allow_html=True)
     for msg in st.session_state["chat"]:
         if msg["role"] == "user":
@@ -321,7 +330,7 @@ def main():
                 unsafe_allow_html=True,
             )
         else:
-            _show_bubble(msg["content"], chat_b64 := (logo_b64 or ""))
+            _show_bubble(msg["content"], icon_b64 or "")
 
     # Autocomplete suggestions on typing
     if question.strip() and not selected_df.empty:
@@ -445,14 +454,17 @@ def main():
     else:
         st.info("Adjust your inputs and click **Generate CLINI-Q Guidance**.")
 
-    # Download chat history
+    # Download chat history (unchanged, visible under chat)
     if st.session_state["chat"]:
         chat_text = ""
         for m in st.session_state["chat"]:
             who = "You" if m["role"] == "user" else "Assistant"
             chat_text += f"{who}: {m['content']}\n\n"
         b64 = base64.b64encode(chat_text.encode()).decode()
-        st.markdown(f'<a href="data:file/txt;base64,{b64}" download="cliniq_chat_history.txt">📥 Download Chat History</a>', unsafe_allow_html=True)
+        st.markdown(
+            f'<a href="data:file/txt;base64,{b64}" download="cliniq_chat_history.txt">📥 Download Chat History</a>',
+            unsafe_allow_html=True,
+        )
 
     st.caption("⚖️ Demo only. No PHI/PII. Always verify locally.")
 
