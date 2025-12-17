@@ -166,7 +166,6 @@ def generate_guidance(role: str, scenario: str, snippets: List[Snippet]) -> dict
 # ---------------- UI ----------------
 st.set_page_config(page_title="CLINI-Q SOP Navigator", page_icon="🧭", layout="wide")
 
-# ===== RISe-style hero (logo + taglines) =====
 st.markdown(
     """
     <style>
@@ -180,17 +179,32 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Big centered logo at top
 # Big left-aligned logo at top
-left_col = st.columns([2, 1, 1])[0]   # pick the FIRST column (index 0)
+left_col = st.columns([2, 1, 1])[0]   # use the FIRST column
 with left_col:
-    st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), use_column_width=True)
+    st.image(str(Path(__file__).parent / "assets" / "cliniq_logo.png"), width=420)
 
-# Title + subtitle + description 
+
+# --- Styles (update .hero to be left-aligned) ---
+st.markdown(
+    """
+    <style>
+      .hero { text-align: left; margin-top: .3rem; }
+      .hero h1 { font-size: 2.2rem; font-weight: 800; margin: .2rem 0 .25rem; }
+      .hero h2 { font-size: 1.1rem; font-weight: 700; font-style: italic; margin: .1rem 0 .6rem; }
+      .hero p  { font-size: 1rem; color:#333; max-width: 950px; margin: 0 0 .8rem 0; }
+      .divider-strong { border-top: 4px solid #222; margin: .2rem 0 1.0rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# --- Left-aligned title, subtitle, and paragraph ---
 st.markdown(
     """
     <div class="hero">
-      <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
+      <h1>🛡️ CLINI-Q Clinical Trial SOP Assistant 🛡️</h1>
+      <h2>💡 Smart Assistant for Clinical Trial SOP Navigation</h2>
       <p>
         I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks,
         CLINI-Q helps research teams navigate essential documentation, regulatory requirements, and
@@ -200,6 +214,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
 
 # Keep the disclaimer where it was
