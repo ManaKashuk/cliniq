@@ -339,9 +339,7 @@ def main():
             st.session_state["last_category"] = category
 
         st.divider()
-        st.subheader("Data & Keys")
-       
-        # Upload hint (visual parity with MSU)
+        st.subheader("Upload")
         uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
         if uploaded:
             st.success(f"Uploaded file: {uploaded.name}")
