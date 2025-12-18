@@ -315,7 +315,7 @@ def main():
                 s = SequenceMatcher(None, question.lower(), q.lower()).ratio()
                 if s > score:
                     best, score = q, s
-            if best and score >= 0.85:
+            if best and score >= 0.75:
                 ans = sel_df[sel_df["Question"] == best].iloc[0]["Answer"]
                 st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
             else:
