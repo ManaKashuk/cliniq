@@ -390,6 +390,17 @@ def main():
         for item in plan.get("compliance", []):
             st.markdown(f"- {item}")
         st.markdown(f"> {plan.get('disclaimer', FINAL_VERIFICATION_LINE)}")
+        # Download chat history
+        if st.session_state["chat"]:
+            chat_text = ""
+            for m in st.session_state["chat"]:
+                who = "You" if m["role"] == "user" else "Assistant"
+                chat_text += f"{who}: {m['content']}\n\n"
+            b64 = base64.b64encode(chat_text.encode()).decode()
+            st.markdown(
+                f'<a href="data:file/txt;base64,{b64}" download="cliniq_chat_history.txt">📥 Download Chat History</a>',
+                unsafe_allow_html=True,
+            )
 
     st.caption("© 2025 CLINIQ • Demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
 
