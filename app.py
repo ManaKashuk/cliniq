@@ -219,6 +219,33 @@ def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], sn
         "disclaimer": FINAL_VERIFICATION_LINE,
     }
 
+def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
+    """
+    Reads CSV with expected columns: Category, Question, Answer.
+    If a row has more than 3 columns (because the Answer contains commas),
+    extra columns are joined back into the Answer field.
+    """
+    rows = []
+    if not path.exists():
+        return pd.DataFrame(columns=["Category", "Question", "Answer"])
+
+    with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
+        reader = csv.reader(f)
+        _ = next(reader, None)  # skip header
+        for raw in reader:
+            if not raw or all(not c.strip() for c in raw):
+                continue
+            # if whole line landed in one cell, split on commas
+            if len(raw) == 1:
+                raw = [c.strip() for c in raw[0].split(",")]
+            # ensure at least 3 fields
+            if len(raw) < 3:
+                raw += [""] * (3 - len(raw))
+            cat = raw[0].strip()
+            q   = raw[1].strip()
+            ans = ",".join(raw[2:]).strip()  # join any extra columns
+            rows.append([cat, q, ans])
+
 # ------------------ APP ------------------
 def main():
     st.set_page_config(page_title=APP_TITLE, page_icon=_load_page_icon(), layout="wide")
@@ -324,13 +351,6 @@ def main():
                         st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
                     st.session_state["clear_input"] = True
                     st.rerun()
-
-    df = pd.DataFrame(rows, columns=["Category", "Question", "Answer"]).fillna("")
-    # normalize whitespace
-    df["Category"] = df["Category"].str.replace(r"\s+", " ", regex=True).str.strip()
-    df["Question"] = df["Question"].str.strip()
-    df["Answer"]   = df["Answer"].str.strip()
-    return df
 
     # Session state
     st.session_state.setdefault("chat", [])
