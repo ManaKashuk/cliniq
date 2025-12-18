@@ -213,7 +213,7 @@ def main():
         <style>
           .hero { text-align:left; margin-top:.3rem; }
           .hero h1 { font-size:2.05rem; font-weight:800; margin:0; }
-          .hero p  { font-size:1.5rem; color:#333; max-width:2000px; margin:.25rem 0 0 0; }
+          .hero p  { font-size:1.6rem; color:#333; max-width:2000px; margin:.25rem 0 0 0; }
           .divider-strong { border-top:4px solid #222; margin:.4rem 0 1.0rem; }
           .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
         </style>
