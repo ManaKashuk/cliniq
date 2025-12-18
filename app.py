@@ -186,8 +186,6 @@ def load_documents(data_dir: Path) -> List[Tuple[str, str]]:
             try:
                 reader = PdfReader(str(p))
                 pages = [page.extract_text() or "" for page in reader.pages]
-                docs.append((p.name, "
-".join(pages)))
             except Exception:
                 pass
     if not docs:
