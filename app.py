@@ -227,7 +227,7 @@ def main():
     icon_b64 = _img_to_b64(ICON_PATH)
     logo_b64 = _img_to_b64(LOGO_PATH) or icon_b64
 
-    # Hero (left-aligned logo + taglines; RISe-like)
+    # Hero (left-aligned logo + taglines;)
     st.markdown(
         """
         <style>
