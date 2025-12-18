@@ -116,25 +116,62 @@ def _show_bubble(html: str, avatar_b64: str):
     
 from difflib import get_close_matches
 
+def get_question_pool(faq_df: pd.DataFrame, sel_df: pd.DataFrame) -> List[str]:
+    """Prefer selected category questions; if none, fall back to all FAQs."""
+    if isinstance(sel_df, pd.DataFrame) and not sel_df.empty:
+        pool = sel_df["Question"].dropna().tolist()
+    elif isinstance(faq_df, pd.DataFrame) and not faq_df.empty:
+        pool = faq_df["Question"].dropna().tolist()
+    else:
+        pool = []
+    # dedupe but keep order
+    seen, uniq = set(), []
+    for q in pool:
+        if q not in seen:
+            uniq.append(q); seen.add(q)
+    return uniq
+
 def suggest_questions(query: str, pool: List[str], n: int = 5) -> List[str]:
-    """
-    Returns up to n similar questions from pool. Uses the same _norm() normalization
-    (dash/space-insensitive) and falls back to the first n questions if no close matches.
-    """
-    # map normalized -> original for stable lookup
+    """Return up to n similar questions (dash/space-insensitive). Fallback to first n."""
+    if not pool:
+        return []
     norm_map = { _norm(x): x for x in pool }
     candidates = get_close_matches(_norm(query), list(norm_map.keys()), n=n, cutoff=0.35)
     if candidates:
         return [norm_map[c] for c in candidates]
+    return pool[:n]
 
-    # fallback: just show the first n unique pool items
-    seen, out = set(), []
-    for q in pool:
-        if q not in seen:
-            out.append(q); seen.add(q)
-        if len(out) >= n:
-            break
-    return out
+def render_alt_buttons(alts: List[str], df_scope: pd.DataFrame, faq_df: pd.DataFrame):
+    """Show clickable alternatives and answer upon click (exact → tolerant fuzzy)."""
+    if not alts:
+        st.session_state["chat"].append({"role":"assistant","content":"No FAQs available yet. Please add rows to cliniq_faq.csv."})
+        return
+    st.markdown("Here are similar questions:")
+    cols = st.columns(min(3, len(alts)))
+    for i, q in enumerate(alts):
+        with cols[i % len(cols)]:
+            if st.button(q, key=f"alt_{i}", use_container_width=True):
+                st.session_state["chat"].append({"role": "user", "content": q})
+                scope = df_scope if isinstance(df_scope, pd.DataFrame) and not df_scope.empty else faq_df
+                # exact
+                if q in scope["Question"].values:
+                    ans = scope[scope["Question"] == q].iloc[0]["Answer"]
+                    st.session_state["chat"].append({"role":"assistant","content":f"<b>Answer:</b> {ans}"})
+                    st.session_state["clear_input"] = True
+                    st.rerun()
+                # tolerant fuzzy
+                best_q, best_score = None, 0.0
+                for cand in scope["Question"].tolist():
+                    score = SequenceMatcher(None, _norm(q), _norm(cand)).ratio()
+                    if score > best_score:
+                        best_q, best_score = cand, score
+                if best_q and best_score >= 0.75:
+                    ans = scope[scope["Question"] == best_q].iloc[0]["Answer"]
+                    st.session_state["chat"].append({"role":"assistant","content":f"<b>Answer:</b> {ans}"})
+                else:
+                    st.session_state["chat"].append({"role":"assistant","content":"Still couldn’t match that wording. Try another suggestion."})
+                st.session_state["clear_input"] = True
+                st.rerun()
 
 # tolerant string normalizer (dash/space/case-insensitive)
 def _norm(s: str) -> str:
@@ -347,11 +384,14 @@ def main():
                                 st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
                                 answered = True
                     if not answered:
-                        pool = sel_df["Question"].tolist() if not sel_df.empty else faq_df["Question"].tolist()
+                        pool = get_question_pool(faq_df, sel_df)
                         alts = suggest_questions(s, pool, n=5)
-                        html = "I couldn't find a close match. Try one of these:<br>" + "<br>".join(f"• {q}" for q in alts)
-                        st.session_state["chat"].append({"role": "assistant", "content": html})
+                        html = "I couldn't find a close match. Try one of these:"
+                        st.session_state["chat"].append({"role":"assistant","content": html})
+                        render_alt_buttons(alts, sel_df, faq_df)
 
+                    st.session_state["clear_input"] = True
+                    st.rerun()
     # --- Manual question input ---
     question = st.text_input(
         "💬 What would you like me to help you with?",
