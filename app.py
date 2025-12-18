@@ -283,7 +283,12 @@ def main():
         st.subheader("Data & Keys")
         st.write(f"SOP directory: `{DATA_DIR}`")
         st.write("FAQ CSV: `cliniq_faq.csv` (Category, Question, Answer)")
-
+       
+        # Upload hint (visual parity with MSU)
+        uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
+        if uploaded:
+            st.success(f"Uploaded file: {uploaded.name}")
+            
     # --- Dynamic suggestions ---
     sel_df = faq_df if category == "All Categories" else faq_df[faq_df["Category"] == category]
     if not sel_df.empty and category != "All Categories":
