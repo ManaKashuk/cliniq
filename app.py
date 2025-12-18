@@ -117,8 +117,12 @@ def _show_bubble(html: str, avatar_b64: str):
 # tolerant string normalizer (dash/space/case-insensitive)
 def _norm(s: str) -> str:
     s = (s or "").strip().lower()
+    # normalize all dash variants to a plain hyphen
+    s = re.sub(r"[\u2010-\u2015\u2212\-]+", "-", s)
+    # remove punctuation that often varies between CSV and UI
+    s = re.sub(r"[,:;/\\()\\[\\]{}\"'·•–—]+", " ", s)
+    # collapse whitespace
     s = re.sub(r"\s+", " ", s)
-    s = re.sub(r"[\u2010-\u2015\u2212\-]+", "-", s)  # all dash variants -> "-"
     return s
 
 def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
