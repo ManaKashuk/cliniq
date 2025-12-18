@@ -231,7 +231,7 @@ def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
 
     with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
         reader = csv.reader(f)
-        _ = next(reader, None)  # skip header
+        _ = next(reader, None)  # skip header row
         for raw in reader:
             if not raw or all(not c.strip() for c in raw):
                 continue
@@ -245,6 +245,13 @@ def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
             q   = raw[1].strip()
             ans = ",".join(raw[2:]).strip()  # join any extra columns
             rows.append([cat, q, ans])
+
+    df = pd.DataFrame(rows, columns=["Category", "Question", "Answer"]).fillna("")
+    # normalize whitespace
+    df["Category"] = df["Category"].str.replace(r"\s+", " ", regex=True).str.strip()
+    df["Question"] = df["Question"].str.strip()
+    df["Answer"]   = df["Answer"].str.strip()
+    return df
 
 # ------------------ APP ------------------
 def main():
