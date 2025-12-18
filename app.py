@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# CLINI-Q • SOP Navigator (clean, consolidated version)
+# CLINI-Q • SOP Navigator (classic chat bubble UI + Participant role + dynamic prompts)
 
 import os
 import csv
@@ -22,9 +22,10 @@ from sklearn.metrics.pairwise import cosine_similarity
 # ------------------ PATHS & CONFIG ------------------
 ROOT_DIR = Path(__file__).parent
 ASSETS_DIR = ROOT_DIR / "assets"
-LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"
+ICON_PATH = ASSETS_DIR / "icon.png"                 # optional small square icon for chat bubble
+LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"          # optional wide header logo
 
-# CSV: look in repo root first, then data/
+# CSV: repo root preferred; fallback to data/
 FAQ_CSV = ROOT_DIR / "cliniq_faq.csv"
 if not FAQ_CSV.exists():
     FAQ_CSV = ROOT_DIR / "data" / "cliniq_faq.csv"
@@ -100,6 +101,19 @@ def _img_to_b64(path: Path) -> str:
     except Exception:
         return ""
 
+def _show_bubble(html: str, avatar_b64: str):
+    st.markdown(
+        f"""
+        <div style='display:flex;align-items:flex-start;margin:10px 0;'>
+            {'<img src="data:image/png;base64,'+avatar_b64+'" width="40" style="margin-right:10px;border-radius:8px;"/>' if avatar_b64 else ''}
+            <div style='background:#f6f6f6;padding:12px;border-radius:120px;max-width:75%;'>
+                {html}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
     """
     Reads CSV with expected columns: Category, Question, Answer.
@@ -112,7 +126,7 @@ def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
 
     with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
         reader = csv.reader(f)
-        _ = next(reader, None)  # skip header row
+        _ = next(reader, None)  # header
         for raw in reader:
             if not raw or all(not c.strip() for c in raw):
                 continue
@@ -191,7 +205,7 @@ def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], sn
 def main():
     st.set_page_config(page_title=APP_TITLE, page_icon="🧭", layout="wide")
 
-    # --- Hero (RISe-like) ---
+    # --- Header (RISe-like, left aligned) ---
     st.markdown(
         """
         <style>
@@ -226,25 +240,20 @@ def main():
     st.session_state.setdefault("last_category", None)
     st.session_state.setdefault("clear_input", False)
 
-    # --- Sidebar ---
+    # --- Sidebar (classic) ---
     with st.sidebar:
         st.header("User Setup")
 
-        # Load FAQ CSV (robust)
         faq_df = load_faq_csv_tolerant(FAQ_CSV)
-        if isinstance(faq_df, pd.DataFrame) and not faq_df.empty and "Category" in faq_df.columns:
-            categories = ["All Categories"] + sorted(faq_df["Category"].unique().tolist())
-        else:
-            categories = ["All Categories"]
-
+        categories = ["All Categories"] + sorted(faq_df["Category"].unique().tolist()) if not faq_df.empty else ["All Categories"]
         category = st.selectbox("📂 Knowledge category (optional)", categories, key="category_select")
 
-        role_label = st.selectbox("🎭 Your role", list(ROLES.keys()), index=list(ROLES.keys()).index("Participant"), key="role_select")
+        role_label = st.selectbox("🎭 Your role", list(ROLES.keys()), key="role_select")
         role_code = ROLES[role_label]
         scenario_list = ROLE_SCENARIOS.get(role_code, [])
         scenario = st.selectbox("📌 Scenario", scenario_list if scenario_list else ["—"], key="scenario_select")
 
-        # Clarifying questions (mostly non-participant scenarios)
+        st.subheader("Clarifying questions")
         answers: Dict[str, str] = {}
         for qdef in CLARIFYING_QUESTIONS.get(scenario, []):
             for q, opts in qdef.items():
@@ -252,7 +261,7 @@ def main():
 
         k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1, key="k_slider")
 
-        # Track changes to refresh dynamic prompts
+        # Refresh dynamic prompts on change
         role_changed = (st.session_state["last_role"] != role_code)
         cat_changed  = (st.session_state["last_category"] != category)
         if role_changed or cat_changed:
@@ -265,13 +274,8 @@ def main():
         st.write(f"SOP directory: `{DATA_DIR}`")
         st.write("FAQ CSV: `cliniq_faq.csv` (Category, Question, Answer)")
 
-    # ---- Dynamic prompts ----
-    if isinstance(faq_df, pd.DataFrame) and not faq_df.empty and "Category" in faq_df.columns:
-        sel_df = faq_df if category == "All Categories" else faq_df[faq_df["Category"] == category]
-    else:
-        sel_df = pd.DataFrame(columns=["Category", "Question", "Answer"])
-
-    suggestions: List[str] = []
+    # --- Dynamic suggestions (old behavior restored) ---
+    sel_df = faq_df if category == "All Categories" else faq_df[faq_df["Category"] == category]
     if not sel_df.empty and category != "All Categories":
         suggestions = sel_df["Question"].head(4).tolist()
     else:
@@ -281,25 +285,27 @@ def main():
     if suggestions:
         st.markdown("#### Try asking one of these:")
         cols = st.columns(min(4, len(suggestions)))
+        icon_b64 = _img_to_b64(ICON_PATH)
         for i, s in enumerate(suggestions):
             with cols[i % len(cols)]:
                 if st.button(s, key=f"sugg_{role_code}_{category}_{i}", use_container_width=True):
+                    # old behavior: push to chat, answer instantly if FAQ matches
                     st.session_state["chat"].append({"role": "user", "content": s})
-                    # Instant FAQ answer if exact match exists
                     if not sel_df.empty and s in sel_df["Question"].values:
                         ans = sel_df[sel_df["Question"] == s].iloc[0]["Answer"]
                         st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
                     st.session_state["clear_input"] = True
                     st.rerun()
 
-    # ---- Manual question box ----
-    seed = ""
+    # --- Manual question input (old flow) ---
     question = st.text_input(
         "💬 What would you like me to help you with?",
-        value=seed,
+        value="" if not st.session_state["clear_input"] else "",
         placeholder="Ask about steps, documentation, reporting timelines…",
         key="free_text",
     )
+    st.session_state["clear_input"] = False
+
     if st.button("Submit", key="submit_btn") and question.strip():
         st.session_state["chat"].append({"role": "user", "content": question})
         if not sel_df.empty:
@@ -325,10 +331,11 @@ def main():
                     st.session_state["chat"].append({"role": "assistant", "content": "No close match found in the selected category."})
         st.rerun()
 
-    # ---- Chat render ----
+    # --- Chat render (old bubble look with icon) ---
     if st.session_state["chat"]:
         st.divider()
         st.subheader("Conversation")
+        icon_b64 = _img_to_b64(ICON_PATH)
         for msg in st.session_state["chat"]:
             if msg["role"] == "user":
                 st.markdown(
@@ -342,18 +349,9 @@ def main():
                     unsafe_allow_html=True,
                 )
             else:
-                st.markdown(
-                    f"""
-                    <div style='display:flex;align-items:flex-start;margin:10px 0;'>
-                        <div style='background:#f6f6f6;padding:12px;border-radius:12px;max-width:75%;'>
-                            {msg['content']}
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                _show_bubble(msg["content"], icon_b64 or "")
 
-    # ---- SOP retrieval & guidance ----
+    # ----- SOP Retrieval & Guidance (unchanged from your classic flow) -----
     st.divider()
     docs = load_documents(DATA_DIR)
     vectorizer, matrix, sources, corpus = build_index(docs)
