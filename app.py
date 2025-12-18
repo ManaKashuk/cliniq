@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# CLINI-Q • SOP Navigator (classic chat bubble UI + Participant role + dynamic prompts + patches)
+# CLINI-Q • SOP Navigator (consolidated)
 
 import os
 import csv
@@ -22,8 +22,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 # ------------------ PATHS & CONFIG ------------------
 ROOT_DIR = Path(__file__).parent
 ASSETS_DIR = ROOT_DIR / "assets"
-ICON_PATH = ASSETS_DIR / "icon.png"                 # optional small square icon for chat bubble
-LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"          # optional wide header logo
+ICON_PATH = ASSETS_DIR / "icon.png"           # optional small square icon for chat bubble
+LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"    # optional wide header logo
 
 # CSV: repo root preferred; fallback to data/
 FAQ_CSV = ROOT_DIR / "cliniq_faq.csv"
@@ -46,34 +46,14 @@ ROLES = {
     "Registered Nurse (RN)": "RN",
     "Administrator (Admin)": "ADMIN",
     "Trainee": "TRAINEE",
-    "Participant": "PARTICIPANT",  # NEW
+    "Participant": "PARTICIPANT",
 }
 
 ROLE_SCENARIOS: Dict[str, List[str]] = {
-    "CRC": [
-        "IP shipment",
-        "Missed visit",
-        "Adverse event (AE) reporting",
-        "Protocol deviation",
-        "Monitoring visit preparation",
-    ],
-    "RN": [
-        "Pre-dose checks for IP",
-        "AE identification and documentation",
-        "Unblinding contingency",
-        "Concomitant medication documentation",
-    ],
-    "ADMIN": [
-        "Delegation log management",
-        "Regulatory binder maintenance",
-        "Safety report distribution",
-        "IRB submission packet assembly",
-    ],
-    "TRAINEE": [
-        "SOP basics: GCP overview",
-        "Site initiation: required logs",
-        "Source documentation fundamentals",
-    ],
+    "CRC": ["IP shipment", "Missed visit", "Adverse event (AE) reporting", "Protocol deviation", "Monitoring visit preparation"],
+    "RN": ["Pre-dose checks for IP", "AE identification and documentation", "Unblinding contingency", "Concomitant medication documentation"],
+    "ADMIN": ["Delegation log management", "Regulatory binder maintenance", "Safety report distribution", "IRB submission packet assembly"],
+    "TRAINEE": ["SOP basics: GCP overview", "Site initiation: required logs", "Source documentation fundamentals"],
     "PARTICIPANT": [
         "Missed/rescheduled visits — windows, documentation, safety checks",
         "Duration & schedule — calendars, visit frequency, conflicts in windows",
@@ -102,18 +82,6 @@ CLARIFYING_QUESTIONS: Dict[str, List[Dict[str, List[str]]]] = {
         {"Related to IP?": ["Related", "Not related", "Unknown"]},
         {"Expectedness (per IB)?": ["Expected", "Unexpected", "Unknown"]},
     ],
-    # --- NEW: participant clarifiers to improve retrieval ---
-    "Missed/rescheduled visits — windows, documentation, safety checks": [
-        {"Visit window status?": ["Within window", "Outside window", "Unknown"]},
-        {"Safety concerns today?": ["Yes", "No"]},
-        {"Reason documented?": ["Yes", "No"]},
-    ],
-    "Costs & reimbursements — billing, travel/parking/meals": [
-        {"Reimbursement type?": ["Travel", "Parking", "Meals", "Childcare", "Other"]},
-    ],
-    "Privacy & confidentiality — protections, IRB oversight": [
-        {"Consent version?": ["Current", "Amended", "Unknown"]},
-    ],
 }
 
 # ------------------ DATA TYPES ------------------
@@ -137,7 +105,7 @@ def _show_bubble(html: str, avatar_b64: str):
     st.markdown(
         f"""
         <div style='display:flex;align-items:flex-start;margin:10px 0;'>
-            {('<img src="data:image/png;base64,'+avatar_b64+'" width="40" style="margin-right:10px;border-radius:8px;"/>') if avatar_b64 else ''}
+            {'<img src="data:image/png;base64,'+avatar_b64+'" width="40" style="margin-right:10px;border-radius:8px;"/>' if avatar_b64 else ''}
             <div style='background:#f6f6f6;padding:12px;border-radius:120px;max-width:75%;'>
                 {html}
             </div>
@@ -146,14 +114,26 @@ def _show_bubble(html: str, avatar_b64: str):
         unsafe_allow_html=True,
     )
 
-# Robust CSV reader (Category, Question, Answer)
+# tolerant string normalizer (dash/space/case-insensitive)
+def _norm(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"[\u2010-\u2015\u2212\-]+", "-", s)  # all dash variants -> "-"
+    return s
+
 def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
+    """
+    Reads CSV with expected columns: Category, Question, Answer.
+    If a row has more than 3 columns (because Answer contains commas),
+    extra columns are joined back into Answer.
+    """
     rows = []
     if not path.exists():
         return pd.DataFrame(columns=["Category", "Question", "Answer"])
+
     with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
         reader = csv.reader(f)
-        _ = next(reader, None)  # header
+        _ = next(reader, None)  # skip header row
         for raw in reader:
             if not raw or all(not c.strip() for c in raw):
                 continue
@@ -165,6 +145,7 @@ def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
             q   = raw[1].strip()
             ans = ",".join(raw[2:]).strip()
             rows.append([cat, q, ans])
+
     df = pd.DataFrame(rows, columns=["Category", "Question", "Answer"]).fillna("")
     df["Category"] = df["Category"].str.replace(r"\s+", " ", regex=True).str.strip()
     df["Question"] = df["Question"].str.strip()
@@ -184,6 +165,7 @@ def load_documents(data_dir: Path) -> List[Tuple[str, str]]:
             try:
                 reader = PdfReader(str(p))
                 pages = [page.extract_text() or "" for page in reader.pages]
+                docs.append((p.name, "\n".join(pages)))
             except Exception:
                 pass
     if not docs:
@@ -206,17 +188,9 @@ def retrieve(query: str, vectorizer, matrix, sources, corpus, k: int = 5) -> Lis
     idxs = sims.argsort()[::-1][:k]
     return [Snippet(text=corpus[i][:2000], source=sources[i], score=float(sims[i])) for i in idxs]
 
-# --- NEW: Clarifier-aware query builder ---
-def build_query(role_code: str, scenario: str, answers: Dict[str, str]) -> str:
-    terms = [role_code, scenario] + [f"{k}: {v}" for k, v in answers.items()]
-    hint = " ".join(terms)
-    return f"{scenario} {role_code} {hint} SOP section responsibilities documentation reporting"
-
-# Guidance composer updated to accept query for citations
-
-def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], snippets: List[Snippet], query: str) -> dict:
+def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], snippets: List[Snippet]) -> dict:
     role_short = ROLES.get(role_label, role_label)
-    cites = build_citations(snippets, query)
+    cites = sorted({f"Source: {s.source}" for s in snippets})
     steps = [
         f"Confirm {role_short} responsibilities for '{scenario}' using cited SOP sections.",
         "Identify protocol windows/criteria impacted based on clarifying details provided.",
@@ -234,40 +208,17 @@ def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], sn
         "disclaimer": FINAL_VERIFICATION_LINE,
     }
 
-# --- NEW: Word export for Guidance ---
-def export_guidance_doc(plan: dict, file_name: str = "cliniq_guidance.docx") -> bytes:
-    doc = Document()
-    doc.add_heading("CLINI-Q Guidance", level=1)
-
-    doc.add_heading("Steps", level=2)
-    for i, step in enumerate(plan.get("steps", []), 1):
-        doc.add_paragraph(f"{i}. {step}")
-
-    doc.add_heading("SOP Citations", level=2)
-    for c in plan.get("citations", []):
-        doc.add_paragraph(c)
-
-    doc.add_heading("Compliance", level=2)
-    for c in plan.get("compliance", []):
-        doc.add_paragraph(f"- {c}")
-
-    doc.add_paragraph(plan.get("disclaimer", FINAL_VERIFICATION_LINE))
-
-    buf = BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-
 # ------------------ MAIN APP ------------------
 def main():
     st.set_page_config(page_title=APP_TITLE, page_icon="🧭", layout="wide")
 
-    # --- Header (classic, left aligned) ---
+    # --- Header (RISe-like, left aligned) ---
     st.markdown(
         """
         <style>
           .hero { text-align:left; margin-top:.3rem; }
           .hero h1 { font-size:2.05rem; font-weight:800; margin:0; }
-          .hero p  { font-size:1.3rem; color:#333; max-width:2000px; margin:.35rem 0 0 0; }
+          .hero p  { font-size:1.25rem; color:#333; max-width:2000px; margin:.35rem 0 0 0; }
           .divider-strong { border-top:4px solid #222; margin:.4rem 0 1.0rem; }
           .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
         </style>
@@ -279,7 +230,7 @@ def main():
     st.markdown(
         """
         <div class="hero">
-          <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
+          <h1>💡Smart Assistant for Clinical Trial SOP Navigation</h1>
           <p> 🛡️I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, helping research teams navigate essential documentation, regulatory requirements, and Good Clinical Practice (GCP) standards with clarity and confidence.🛡️</p>
         </div>
         """,
@@ -295,10 +246,7 @@ def main():
     st.session_state.setdefault("last_category", None)
     st.session_state.setdefault("clear_input", False)
 
-    # Predeclare uploaded_docs to append later
-    uploaded_docs: List[Tuple[str, str]] = []
-
-    # --- Sidebar (classic) ---
+    # --- Sidebar ---
     with st.sidebar:
         st.header("User Setup")
 
@@ -317,7 +265,7 @@ def main():
             for q, opts in qdef.items():
                 answers[q] = st.selectbox(q, opts, key=f"clar_{q}")
 
-        k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1, key="k_slider")
+        st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1, key="k_slider")
 
         # Refresh dynamic prompts on change
         role_changed = (st.session_state["last_role"] != role_code)
@@ -331,13 +279,8 @@ def main():
         st.subheader("Data & Keys")
         st.write(f"SOP directory: `{DATA_DIR}`")
         st.write("FAQ CSV: `cliniq_faq.csv` (Category, Question, Answer)")
-        
-        # Upload hint (visual parity with MSU)
-        uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
-        if uploaded:
-            st.success(f"Uploaded file: {uploaded.name}")
 
-    # --- Dynamic suggestions (classic) ---
+    # --- Dynamic suggestions ---
     sel_df = faq_df if category == "All Categories" else faq_df[faq_df["Category"] == category]
     if not sel_df.empty and category != "All Categories":
         suggestions = sel_df["Question"].head(4).tolist()
@@ -353,13 +296,31 @@ def main():
             with cols[i % len(cols)]:
                 if st.button(s, key=f"sugg_{role_code}_{category}_{i}", use_container_width=True):
                     st.session_state["chat"].append({"role": "user", "content": s})
-                    if not sel_df.empty and s in sel_df["Question"].values:
-                        ans = sel_df[sel_df["Question"] == s].iloc[0]["Answer"]
-                        st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
+                    answered = False
+                    if not sel_df.empty:
+                        # 1) exact match
+                        if s in sel_df["Question"].values:
+                            ans = sel_df[sel_df["Question"] == s].iloc[0]["Answer"]
+                            st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
+                            answered = True
+                        else:
+                            # 2) tolerant/fuzzy match
+                            q_norm = _norm(s)
+                            best_q, best_score = None, 0.0
+                            for q in sel_df["Question"].tolist():
+                                score = SequenceMatcher(None, q_norm, _norm(q)).ratio()
+                                if score > best_score:
+                                    best_q, best_score = q, score
+                            if best_q and best_score >= 0.75:
+                                ans = sel_df[sel_df["Question"] == best_q].iloc[0]["Answer"]
+                                st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
+                                answered = True
+                    if not answered:
+                        st.session_state["chat"].append({"role": "assistant", "content": "I couldn't find a matching FAQ for that wording. Try another category or rephrase."})
                     st.session_state["clear_input"] = True
                     st.rerun()
 
-    # --- Manual question input (classic flow) ---
+    # --- Manual question input ---
     question = st.text_input(
         "💬 What would you like me to help you with?",
         value="" if not st.session_state["clear_input"] else "",
@@ -374,18 +335,21 @@ def main():
             all_q = sel_df["Question"].tolist()
             best, score = None, 0.0
             for q in all_q:
-                s = SequenceMatcher(None, question.lower(), q.lower()).ratio()
+                s = SequenceMatcher(None, _norm(question), _norm(q)).ratio()
                 if s > score:
                     best, score = q, s
             if best and score >= 0.75:
                 ans = sel_df[sel_df["Question"] == best].iloc[0]["Answer"]
                 st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
             else:
-                top = get_close_matches(question, all_q, n=3, cutoff=0.45)
+                top = get_close_matches(_norm(question), [_norm(x) for x in all_q], n=3, cutoff=0.45)
                 if top:
+                    # map normalized back to original for display
+                    inv = { _norm(x): x for x in all_q }
+                    top_disp = [inv[t] for t in top if t in inv]
                     msg = (
                         "I couldn't find an exact match. Here are similar questions:<br>"
-                        + "<br>".join(f"{i}. {t}" for i, t in enumerate(top, start=1))
+                        + "<br>".join(f"{i}. {t}" for i, t in enumerate(top_disp, start=1))
                         + "<br>Click a suggestion above or refine your query."
                     )
                     st.session_state["chat"].append({"role": "assistant", "content": msg})
@@ -393,7 +357,7 @@ def main():
                     st.session_state["chat"].append({"role": "assistant", "content": "No close match found in the selected category."})
         st.rerun()
 
-    # --- Chat render (classic bubble look with icon) ---
+    # --- Chat render (bubble look with icon) ---
     if st.session_state["chat"]:
         st.divider()
         st.subheader("Conversation")
@@ -413,28 +377,17 @@ def main():
             else:
                 _show_bubble(msg["content"], icon_b64 or "")
 
-        # Download chat history (unchanged, visible under chat)
-    if st.session_state["chat"]:
-        chat_text = ""
-        for m in st.session_state["chat"]:
-            who = "You" if m["role"] == "user" else "Assistant"
-            chat_text += f"{who}: {m['content']}\n\n"
-        b64 = base64.b64encode(chat_text.encode()).decode()
-        st.markdown(
-            f'<a href="data:file/txt;base64,{b64}" download="cliniq_chat_history.txt">📥 Download Chat History</a>',
-            unsafe_allow_html=True,
-        )
-
     # ----- SOP Retrieval & Guidance -----
     st.divider()
-    docs = load_documents(DATA_DIR) + uploaded_docs
+    docs = load_documents(DATA_DIR)
     vectorizer, matrix, sources, corpus = build_index(docs)
 
-    sop_query = build_query(ROLES[role_label], scenario, answers)
+    sop_query = f"{scenario} {ROLES[role_label]} SOP responsibilities documentation reporting"
     st.subheader("🔎 Search evidence from SOPs")
     st.write("Query:", sop_query)
 
-    snippets = retrieve(sop_query, vectorizer, matrix, sources, corpus, k=st.session_state["k_slider"])
+    k = st.session_state.get("k_slider", 5)
+    snippets = retrieve(sop_query, vectorizer, matrix, sources, corpus, k=k)
     if snippets:
         for i, s in enumerate(snippets, 1):
             with st.expander(f"{i}. {s.source}  (relevance {s.score:.2f})", expanded=(i == 1)):
@@ -444,7 +397,7 @@ def main():
 
     st.divider()
     if st.button("Generate CLINI-Q Guidance", type="primary", key="guidance_btn"):
-        plan = compose_guidance(role_label, scenario, answers, snippets, sop_query)
+        plan = compose_guidance(role_label, scenario, answers, snippets)
         st.success("Draft guidance generated.")
         c1, c2 = st.columns(2)
 
@@ -466,16 +419,7 @@ def main():
             st.markdown(f"- {item}")
         st.markdown(f"> {plan.get('disclaimer', FINAL_VERIFICATION_LINE)}")
 
-        # --- NEW: Export Guidance (Word) ---
-        doc_bytes = export_guidance_doc(plan)
-        st.download_button(
-            "⬇️ Export Guidance (Word)",
-            data=doc_bytes,
-            file_name="cliniq_guidance.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-
-    st.caption("© 2025 CLINIQ • Demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
+    st.caption("© 2025 CLINI-Q • Demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
 
 # -------- entrypoint --------
 if __name__ == "__main__":
