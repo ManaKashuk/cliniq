@@ -337,8 +337,9 @@ def main():
         
         # Upload hint (visual parity with MSU)
         uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
-        ifif uploaded:
-
+        if uploaded:
+            st.success(f"Uploaded file: {uploaded.name}")
+        
         # --- NEW: optional file uploader & indexing (pdf/txt only) ---
         upload_dir = ROOT_DIR / "data" / "uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
