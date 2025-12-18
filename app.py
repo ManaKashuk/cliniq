@@ -35,8 +35,8 @@ DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
 
 APP_TITLE = "CLINI-Q • SOP Navigator"
 DISCLAIMER = (
-    "This tool provides procedural guidance only. Do not use for clinical decisions or PHI. "
-    "Always verify with your site SOPs and Principal Investigator (PI)."
+    " 💻This tool provides procedural guidance only. Do not use for clinical decisions or PHI. "
+    " 📚Always verify with your site SOPs and Principal Investigator (PI)."
 )
 FINAL_VERIFICATION_LINE = "Verify with your site SOP and PI before execution."
 
@@ -503,7 +503,7 @@ def main():
             st.markdown(f"- {item}")
         st.markdown(f"> {plan.get('disclaimer', FINAL_VERIFICATION_LINE)}")
 
-    st.caption("© 2025 CLINIQ ⚖️Disclaimer: Demo tool only. No PHI/PII• For official guidance, refer to your office policies.⚖️")
+    st.caption("© 2025 CLINIQ ⚖️Disclaimer: Demo tool only. No PHI/PII 📚 For official guidance, refer to your office policies.⚖️")
 
 # -------- entrypoint --------
 if __name__ == "__main__":
