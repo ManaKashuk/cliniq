@@ -503,7 +503,7 @@ def main():
             st.markdown(f"- {item}")
         st.markdown(f"> {plan.get('disclaimer', FINAL_VERIFICATION_LINE)}")
 
-    st.caption("© 2025 CLINI-Q • Demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
+    st.caption("© 2025 CLINIQ ⚖️Disclaimer: Demo tool only. No PHI/PII• For official guidance, refer to your office policies.⚖️")
 
 # -------- entrypoint --------
 if __name__ == "__main__":
