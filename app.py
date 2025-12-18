@@ -1,352 +1,489 @@
 #!/usr/bin/env python3
-# CLINI-Q: Intelligent SOP Navigator (Streamlit MVP)
-# Sidebar kept; RISe-style hero; CSV-driven FAQs (single file: data/cliniq_faq.csv)
+# CLINI-Q • SOP Navigator  (updated: adds Participant role & scenarios; keeps original flow)
 
 import os
-import re
-import csv
-import streamlit as st
-from typing import List, Tuple
-from pathlib import Path
+import base64
+from io import BytesIO
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
 
-# Retrieval
+import streamlit as st
+import pandas as pd
+from PIL import Image
+from difflib import SequenceMatcher, get_close_matches
+
+from pypdf import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# PDF/Text parsing
-from pypdf import PdfReader
+# ------------------ CONFIG ------------------
+APP_TITLE = "CLINI-Q • SOP Navigator"
+ASSETS_DIR = Path(__file__).parent / "assets"
+ICON_PATH = ASSETS_DIR / "icon.png"                  # <-- put your icon here (used everywhere)
+LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"           # optional wide header logo (falls back to icon)
 
-# Optional OpenAI usage
-USE_OPENAI = False
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-client = None
-try:
-    api_key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
-    if not api_key:
-        api_key = os.environ.get("OPENAI_API_KEY", None)
-    if api_key:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        USE_OPENAI = True
-except Exception:
-    USE_OPENAI = False
+# CSV location: keep as in your original app — place cliniq_faq.csv next to this .py file
+FAQ_CSV   = Path(__file__).parent / "cliniq_faq.csv"  # expected columns: Category, Question, Answer
 
-ROOT_DIR = Path(__file__).parent
-DATA_DIR = ROOT_DIR / "data" / "sops"
-FAQ_CSV_PATH = ROOT_DIR / "data" / "cliniq_faq.csv"
+DEFAULT_SOP_DIR = Path(__file__).parent / "data" / "sops"
+DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
 
+DISCLAIMER = (
+    "This tool provides procedural guidance only. Do not use for clinical decisions or PHI. "
+    "Always verify with your site SOPs and Principal Investigator (PI)."
+)
+FINAL_VERIFICATION_LINE = "Verify with your site SOP and PI before execution."
+
+# ------------------ ROLES ------------------
 ROLES = {
     "Clinical Research Coordinator (CRC)": "CRC",
     "Registered Nurse (RN)": "RN",
     "Administrator (Admin)": "ADMIN",
     "Trainee": "TRAINEE",
+    # NEW:
+    "Participant": "PARTICIPANT",
 }
 
-DEFAULT_SCENARIOS = [
-    "How do I document an adverse event (AE) for a subject?",
-    "What steps are required before dosing an investigational product (IP)?",
-    "How do I manage delegation logs for new team members?",
-    "What is the procedure to report a protocol deviation?",
-]
+# ------------------ SCENARIOS ------------------
+ROLE_SCENARIOS: Dict[str, List[str]] = {
+    "CRC": ["IP shipment", "Missed visit", "Adverse event (AE) reporting", "Protocol deviation", "Monitoring visit preparation"],
+    "RN": ["Pre-dose checks for IP", "AE identification and documentation", "Unblinding contingency", "Concomitant medication documentation"],
+    "ADMIN": ["Delegation log management", "Regulatory binder maintenance", "Safety report distribution", "IRB submission packet assembly"],
+    "TRAINEE": ["SOP basics: GCP overview", "Site initiation: required logs", "Source documentation fundamentals"],
+    # NEW (aligned with Participant FAQ pack):
+    "PARTICIPANT": [
+        "Missed/rescheduled visits — windows, documentation, safety checks",
+        "Duration & schedule — calendars, visit frequency, conflicts in windows",
+        "Costs & reimbursements — billing, travel/parking/meals",
+        "Placebo & randomization — plain-language explanation",
+        "Side effects & AEs — who to contact, how handled",
+        "Privacy & confidentiality — protections, IRB oversight",
+        "Eligibility, alternatives, withdrawal rights, results access, complaints",
+        "Participant communication — guidance & complaint pathways",
+    ],
+}
 
-DISCLAIMER = (
-    "This tool provides procedural guidance only. Verify against your site SOPs and Principal "
-    "Investigator (PI) instructions before execution. Do not use this tool for clinical decisions "
-    "or to handle protected health information."
-)
+CLARIFYING_QUESTIONS: Dict[str, List[Dict[str, List[str]]]] = {
+    "IP shipment": [
+        {"Shipment type?": ["Initial shipment", "Resupply", "Return/destruction"]},
+        {"Temperature control?": ["Ambient", "Refrigerated (2–8°C)", "Frozen (≤ -20°C)"]},
+        {"Chain of custody ready?": ["Yes", "No"]},
+    ],
+    "Missed visit": [
+        {"Visit window status?": ["Within window", "Outside window"]},
+        {"Reason documented?": ["Yes", "No"]},
+        {"Make-up allowed by protocol?": ["Yes", "No", "Unclear"]},
+    ],
+    "Adverse event (AE) reporting": [
+        {"AE seriousness?": ["Non-serious", "Serious (SAE)"]},
+        {"Related to IP?": ["Related", "Not related", "Unknown"]},
+        {"Expectedness (per IB)?": ["Expected", "Unexpected", "Unknown"]},
+    ],
+    "Protocol deviation": [
+        {"Deviation type?": ["Minor", "Major"]},
+        {"Discovered by?": ["Self-identified", "Monitor", "Sponsor", "IRB", "Other"]},
+        {"Subject safety impacted?": ["Yes", "No", "Unknown"]},
+    ],
+    "Monitoring visit preparation": [
+        {"Visit type?": ["SIV", "IMV", "COV"]},
+        {"Remote or on-site?": ["Remote", "On-site"]},
+        {"Pre-visit docs prepared?": ["Yes", "No"]},
+    ],
+    "Pre-dose checks for IP": [
+        {"Dosing day?": ["Screening", "Baseline", "Treatment day", "Other"]},
+        {"Pre-dose labs within window?": ["Yes", "No", "Unknown"]},
+        {"Eligibility confirmed?": ["Yes", "No", "Pending PI sign-off"]},
+    ],
+    "Delegation log management": [
+        {"New team member?": ["Yes", "No"]},
+        {"Training complete?": ["Yes", "No", "In progress"]},
+        {"Signature captured?": ["Wet ink", "eSign", "Not captured"]},
+    ],
+    "SOP basics: GCP overview": [
+        {"Prior experience?": ["None", "<1 year", "1–3 years", "3+ years"]},
+    ],
+    # Participant flows use FAQ content primarily; no strict clarifiers here to keep UI light.
+}
 
-# ---------------- Data classes & helpers ----------------
+# ------------------ TYPES ------------------
 @dataclass
 class Snippet:
     text: str
     source: str
     score: float
 
+# ------------------ IMAGE/STYLE HELPERS ------------------
+def _img_to_b64(path: Path) -> str:
+    try:
+        img = Image.open(path)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
+
+def _load_page_icon():
+    try:
+        if ICON_PATH.exists():
+            return Image.open(ICON_PATH)
+    except Exception:
+        pass
+    return "🧭"
+
+def _show_bubble(html: str, avatar_b64: str):
+    st.markdown(
+        f"""
+        <div style='display:flex;align-items:flex-start;margin:10px 0;'>
+            <img src='data:image/png;base64,{avatar_b64}' width='40' style='margin-right:10px;border-radius:8px;'/>
+            <div style='background:#f6f6f6;padding:12px;border-radius:120px;max-width:75%;'>
+                {html}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# ------------------ KNOWLEDGE ------------------
 @st.cache_data(show_spinner=False)
 def load_documents(data_dir: Path) -> List[Tuple[str, str]]:
-    """Return list of (source, text) tuples from .txt and .pdf files."""
-    docs = []
+    docs: List[Tuple[str, str]] = []
     for p in sorted(data_dir.glob("**/*")):
         if p.suffix.lower() == ".txt":
             try:
-                docs.append((str(p.name), p.read_text(encoding="utf-8", errors="ignore")))
+                docs.append((p.name, p.read_text(encoding="utf-8", errors="ignore")))
             except Exception:
                 pass
         elif p.suffix.lower() == ".pdf":
             try:
                 reader = PdfReader(str(p))
                 pages = [page.extract_text() or "" for page in reader.pages]
-                text = "\n".join(pages)
-                docs.append((str(p.name), text))
+                docs.append((p.name, "\n".join(pages)))
             except Exception:
                 pass
+    if not docs:
+        docs = [("placeholder.txt", "No SOP files found. Add .txt/.pdf under data/sops.")]
     return docs
 
 @st.cache_data(show_spinner=False)
 def build_index(docs: List[Tuple[str, str]]):
-    """Build and cache a TF-IDF index."""
     sources = [d[0] for d in docs]
     corpus = [d[1] for d in docs]
-    if not corpus:
-        corpus = ["placeholder text for empty corpus"]
-        sources = ["placeholder.txt"]
-    # Safe params for tiny corpora to avoid max_df/min_df conflicts
-    n_docs = len(corpus)
-    if n_docs < 2:
-        vectorizer = TfidfVectorizer(stop_words="english", min_df=1, max_df=1.0)
-    else:
-        vectorizer = TfidfVectorizer(stop_words="english", min_df=1, max_df=0.95)
+    n = len(corpus)
+    vectorizer = TfidfVectorizer(stop_words="english", min_df=1, max_df=(0.95 if n > 1 else 1.0))
     matrix = vectorizer.fit_transform(corpus)
     return vectorizer, matrix, sources, corpus
 
 def retrieve(query: str, vectorizer, matrix, sources, corpus, k: int = 5) -> List[Snippet]:
     if not query.strip():
         return []
-    q_vec = vectorizer.transform([query])
-    sims = cosine_similarity(q_vec, matrix).ravel()
+    sims = cosine_similarity(vectorizer.transform([query]), matrix).ravel()
     idxs = sims.argsort()[::-1][:k]
     return [Snippet(text=corpus[i][:2000], source=sources[i], score=float(sims[i])) for i in idxs]
 
-def draft_prompt(role: str, scenario: str, snippets: List[Snippet]) -> str:
-    context_blocks = "\n\n".join([f"[Source: {s.source}]\n{s.text}" for s in snippets])
-    role_short = ROLES.get(role, role)
-    prompt = f"""You are CLINI-Q, an intelligent SOP navigator for clinical research operations.
-User role: {role_short}
-User scenario/question: {scenario}
+def build_query(role_code: str, scenario: str, answers: Dict[str, str]) -> str:
+    terms = [role_code, scenario] + [t for kv in answers.items() for t in kv]
+    hint = " ".join(terms)
+    return f"{scenario} {role_code} {hint} SOP section responsibilities documentation reporting"
 
-Context (SOP snippets):
-{context_blocks}
-
-Write a step-by-step, role-specific procedural guidance (numbered steps). For each key step, cite the relevant [Source: …].
-Include a short 'Compliance Reminders' list after the steps.
-Never give medical advice. Always end with: 'Verify against site SOP and PI instructions before execution.'
-Return JSON with keys: steps (list of strings), citations (list of 'Source: file.pdf' strings), compliance (list of strings), disclaimer (string)."""
-    return prompt
-
-def offline_plan(role: str, scenario: str, snippets: List[Snippet]) -> dict:
+def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], snippets: List[Snippet]) -> dict:
+    role_short = ROLES.get(role_label, role_label)
+    cites = sorted({f"Source: {s.source}" for s in snippets})
     steps = [
-        f"Confirm scope for {role} and locate applicable SOP section(s).",
-        "Review inclusion/exclusion criteria and protocol requirements relevant to the scenario.",
-        "Follow site-required documentation sequence (forms/logs) as referenced in cited sources.",
-        "Record actions with date/time, signer, and cross-references in the source record.",
-        "Escalate uncertainties to PI/clinical lead; document clarifications."
+        f"Confirm {role_short} responsibilities for '{scenario}' using cited SOP sections.",
+        "Identify protocol windows/criteria impacted based on clarifying details provided.",
+        "Follow site-required documentation order; complete forms/logs referenced in citations.",
+        "Record actions with date/time, signer, and cross-references in source records.",
+        "Escalate uncertainties to PI/medical lead and document guidance.",
     ]
-    citations = sorted({f"Source: {s.source}" for s in snippets})
+    docs = [
+        "Source notes capturing who/what/when/why.",
+        "Role-specific log(s) (e.g., delegation, accountability, AE/SAE form).",
+        "Correspondence record (e.g., email to sponsor/CRO/IRB) if applicable.",
+    ]
+    escalations = [
+        "Potential subject safety impact.",
+        "Regulatory/IRB reporting thresholds met or unclear.",
+        "Protocol-required timelines at risk (e.g., SAE 24-hour reporting).",
+    ]
     compliance = [
-        "Adhere to ICH-GCP E6(R2) principles.",
-        "Use site-approved templates and logs.",
-        "Do not enter PHI into this tool; maintain confidentiality.",
+        "Adhere to ICH-GCP E6(R2) and site SOPs.",
+        "Use site-approved templates; maintain confidentiality (no PHI in this tool).",
+        "Cite SOP section(s) in source; retain chain of custody where relevant.",
     ]
     return {
         "steps": steps,
-        "citations": list(citations),
+        "required_docs": docs,
+        "escalations": escalations,
+        "citations": cites,
         "compliance": compliance,
-        "disclaimer": "Verify against site SOP and PI instructions before execution.",
+        "disclaimer": FINAL_VERIFICATION_LINE,
     }
 
-def generate_guidance(role: str, scenario: str, snippets: List[Snippet]) -> dict:
-    if USE_OPENAI and client:
-        prompt = draft_prompt(role, scenario, snippets)
+# ------------------ APP ------------------
+def main():
+    st.set_page_config(page_title=APP_TITLE, page_icon=_load_page_icon(), layout="wide")
+
+    icon_b64 = _img_to_b64(ICON_PATH)
+    logo_b64 = _img_to_b64(LOGO_PATH) or icon_b64
+
+    # Hero (left-aligned logo + taglines; RISe-like)
+    st.markdown(
+        """
+        <style>
+          .hero { text-align:left; margin-top:.3rem; }
+          .hero h1 { font-size:2.05rem; font-weight:800; margin:0; }
+          .hero p  { font-size:1.4rem; color:#333; max-width:1200px; margin:.35rem 0 0 0; }
+          .divider-strong { border-top:4px solid #222; margin:.4rem 0 1.0rem; }
+          .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="hero-wrap" style="display:flex;gap:16px;align-items:center;">
+            <img src="data:image/png;base64,{(logo_b64 or icon_b64)}" style="height:120px;border-radius:8px;"/>
+            <div class="hero">
+                <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
+                <p> 🛡️I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, helping research teams navigate essential documentation, regulatory requirements, and Good Clinical Practice (GCP) standards with clarity and confidence.🛡️</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
+    st.caption(DISCLAIMER)
+
+    # Upload (optional)
+    uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
+    if uploaded:
+        st.success(f"Uploaded file: {uploaded.name}")
+
+    # Session state
+    st.session_state.setdefault("chat", [])
+    st.session_state.setdefault("suggested", [])
+    st.session_state.setdefault("last_category", "")
+    st.session_state.setdefault("clear_input", False)
+
+    # Sidebar: Category + Role + Scenario + Clarifiers
+    with st.sidebar:
+        st.header("User Setup")
+
         try:
-            resp = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are a helpful, compliance-focused assistant."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.2,
+            faq_df = pd.read_csv(FAQ_CSV).fillna("")
+            categories = ["All Categories"] + sorted(faq_df["Category"].unique().tolist())
+        except Exception:
+            faq_df = pd.DataFrame(columns=["Category", "Question", "Answer"])
+            categories = ["All Categories"]
+
+        category = st.selectbox("📂 Knowledge category (optional)", categories)
+
+        role_label = st.selectbox("🎭 Your role", list(ROLES.keys()))
+        role_code = ROLES[role_label]
+        scenario_list = ROLE_SCENARIOS.get(role_code, [])
+        scenario = st.selectbox("📌 Scenario", scenario_list if scenario_list else ["—"])
+
+        st.subheader("Clarifying questions")
+        answers: Dict[str, str] = {}
+        for qdef in CLARIFYING_QUESTIONS.get(scenario, []):
+            for q, opts in qdef.items():
+                answers[q] = st.selectbox(q, opts, key=f"q_{q}")
+
+        k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
+        st.divider()
+        st.subheader("Data & Keys")
+        st.write(f"SOP directory: `{DATA_DIR}`")
+        st.write("CSV: `cliniq_faq.csv` (Category, Question, Answer) placed next to this app file.")
+
+    if st.session_state["last_category"] != category:
+        st.session_state["chat"] = []
+        st.session_state["suggested"] = []
+        st.session_state["last_category"] = category
+
+    # Chat input + suggestions
+    question = st.text_input(
+        "💬 What would you like me to help you with?",
+        value="" if st.session_state["clear_input"] else "",
+        placeholder="Ask about steps, documentation, reporting timelines…",
+    )
+    st.session_state["clear_input"] = False
+
+    selected_df = (
+        faq_df if faq_df.empty or category == "All Categories"
+        else faq_df[faq_df["Category"] == category]
+    )
+
+    if not question.strip():
+        st.markdown("💬 Try asking one of these:")
+        examples = (
+            selected_df["Question"].head(3).tolist()
+            if not selected_df.empty
+            else [f"What are the steps for {s}?" for s in ROLE_SCENARIOS.get(role_code, [])[:3]]
+        )
+        cols = st.columns(len(examples)) if examples else []
+        for i, q in enumerate(examples):
+            if st.button(q, key=f"ex_{i}"):
+                st.session_state["chat"].append({"role": "user", "content": q})
+                if not selected_df.empty and q in selected_df["Question"].values:
+                    ans = selected_df[selected_df["Question"] == q].iloc[0]["Answer"]
+                    st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
+                st.session_state["clear_input"] = True
+                st.rerun()
+
+    # Show chat
+    st.markdown("<div style='margin-top:10px;'>", unsafe_allow_html=True)
+    for msg in st.session_state["chat"]:
+        if msg["role"] == "user":
+            st.markdown(
+                f"""
+                <div style='text-align:right;margin:10px 0;'>
+                    <div style='display:inline-block;background:#e6f7ff;padding:12px;border-radius:12px;max-width:75%;'>
+                        <b>You:</b> {msg['content']}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
-            content = resp.choices[0].message.content
-            import json
-            try:
-                data = json.loads(content)
-            except Exception:
-                data = {"steps": [content], "citations": [s.source for s in snippets], "compliance": [],
-                        "disclaimer": "Verify against site SOP and PI instructions before execution."}
-            return data
-        except Exception as e:
-            st.warning(f"OpenAI call failed; running in offline mode. ({e})")
-            return offline_plan(role, scenario, snippets)
-    else:
-        return offline_plan(role, scenario, snippets)
+        else:
+            _show_bubble(msg["content"], icon_b64 or "")
 
-# ---------------- UI ----------------
-st.set_page_config(page_title="CLINI-Q SOP Navigator", page_icon="🧭", layout="wide")
+    # Autocomplete suggestions on typing
+    if question.strip() and not selected_df.empty:
+        matches = [q for q in selected_df["Question"].tolist() if question.lower() in q.lower()][:5]
+        if matches:
+            st.markdown("<div style='margin-top:5px;'><b>Suggestions:</b></div>", unsafe_allow_html=True)
+            for s in matches:
+                if st.button(s, key=f"suggest_{s}"):
+                    st.session_state["chat"].append({"role": "user", "content": s})
+                    ans = selected_df[selected_df["Question"] == s].iloc[0]["Answer"]
+                    st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
+                    st.session_state["clear_input"] = True
+                    st.rerun()
 
-# ===== RISe-style hero (logo + taglines) =====
-st.markdown(
-    """
-    <style>
-      .hero { text-align: left; margin-top: .3rem; }
-      .hero h1 { font-size: 2.2rem; font-weight: 800; margin: .2rem 0 .25rem; }
-      .hero h2 { font-size: 1.1rem; font-weight: 700; font-style: italic; margin: .1rem 0 .6rem; }
-      .hero p  { font-size: 1rem; color:#333; max-width: 950px; margin: 0 0 .8rem 0; }
-      .divider-strong { border-top: 4px solid #222; margin: .2rem 0 1.0rem; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+    # Submit → exact/close match from CSV
+    if st.button("Submit") and question.strip():
+        st.session_state["chat"].append({"role": "user", "content": question})
+        prev_suggestions = st.session_state["suggested"]
+        st.session_state["suggested"] = []
+        st.session_state["clear_input"] = True
 
-# Left-aligned big logo at top
-left_col = st.columns([2, 1, 1])[0]
-with left_col:
-    st.image(str(ROOT_DIR / "assets" / "cliniq_logo.png"), width=420)
+        if not selected_df.empty:
+            all_q = selected_df["Question"].tolist()
+            best, score = None, 0.0
+            for q in all_q:
+                s = SequenceMatcher(None, question.lower(), q.lower()).ratio()
+                if s > score:
+                    best, score = q, s
+            if best and score >= 0.85:
+                row = selected_df[selected_df["Question"] == best].iloc[0]
+                html = f"<b>Answer:</b> {row['Answer']}<br><i>(Category: {row['Category']})</i>"
+                st.session_state["chat"].append({"role": "assistant", "content": html})
+            else:
+                if prev_suggestions:
+                    sq = prev_suggestions[0]
+                    row = faq_df[faq_df["Question"] == sq].iloc[0]
+                    html = f"<b>Answer:</b> {row['Answer']}<br><i>(Category: {row['Category']})</i>"
+                    st.session_state["chat"].append({"role": "assistant", "content": html})
+                else:
+                    top = get_close_matches(question, faq_df["Question"].tolist(), n=3, cutoff=0.4)
+                    if top:
+                        guessed_cat = faq_df[faq_df["Question"] == top[0]].iloc[0]["Category"]
+                        html = (
+                            f"I couldn't find an exact match, but your question seems related to <b>{guessed_cat}</b>.<br><br>"
+                            "Here are similar questions:<br>" +
+                            "".join(f"{i}. {q}<br>" for i, q in enumerate(top, start=1)) +
+                            "<br>Select one below to see its answer."
+                        )
+                        st.session_state["chat"].append({"role": "assistant", "content": html})
+                        st.session_state["suggested"] = top
+                    else:
+                        st.session_state["chat"].append({"role": "assistant", "content": "I couldn't find a close match. Please try rephrasing."})
+        else:
+            st.session_state["chat"].append({"role": "assistant", "content": "Thanks—see SOP-based guidance below."})
 
-# Left-aligned title + subtitle + description
-st.markdown(
-    """
-    <div class="hero">
-      <h1>🛡️ CLINI-Q Clinical Trial SOP Assistant 🛡️</h1>
-      <h2>💡 Smart Assistant for Clinical Trial SOP Navigation</h2>
-      <p>
-        I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks,
-        CLINI-Q helps research teams navigate essential documentation, regulatory requirements, and
-        Good Clinical Practice (GCP) standards with clarity and confidence.
-      </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
+        st.rerun()
 
-# Disclaimer
-st.caption(DISCLAIMER)
+    # Buttons for suggested similar questions
+    if st.session_state["suggested"]:
+        st.markdown("<div style='margin-top:15px;'><b>Choose a question:</b></div>", unsafe_allow_html=True)
+        for i, q in enumerate(st.session_state["suggested"]):
+            if st.button(q, key=f"choice_{i}"):
+                row = faq_df[faq_df["Question"] == q].iloc[0]
+                st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {row['Answer']}"})
+                st.session_state["suggested"] = []
+                st.session_state["clear_input"] = True
+                st.rerun()
 
-# ===== Sidebar (unchanged) =====
-with st.sidebar:
-    st.header("User Setup")
-    role = st.selectbox("Your role", list(ROLES.keys()))
-    scenario = st.selectbox("Common scenarios", DEFAULT_SCENARIOS)
-    custom = st.text_area("…or describe your scenario", placeholder="Describe your procedural question…", height=100)
-    query = custom.strip() or scenario
-    k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
+    # ----- SOP Retrieval & Guidance -----
     st.divider()
-    st.subheader("Data & Keys")
-    st.write("Place SOP files (.txt/.pdf) in `data/sops`. On Streamlit Cloud, upload via repo.")
-    st.write("Set `OPENAI_API_KEY` in Streamlit Secrets for LLM drafting (optional).")
+    docs = load_documents(DATA_DIR)
+    vectorizer, matrix, sources, corpus = build_index(docs)
 
-# ===== FAQs from single CSV (data/cliniq_faq.csv) =====
-import re, csv
+    sop_query = build_query(ROLES[role_label], scenario, answers)
+    st.subheader("🔎 Search evidence from SOPs")
+    st.write("Query:", sop_query)
 
-FAQ_CSV_PATH = ROOT_DIR / "data" / "cliniq_faq.csv"
+    snippets = retrieve(sop_query, vectorizer, matrix, sources, corpus, k=k)
+    if snippets:
+        for i, s in enumerate(snippets, 1):
+            with st.expander(f"{i}. {s.source}  (relevance {s.score:.2f})", expanded=(i == 1)):
+                st.text(s.text if s.text else "(no text)")
+    else:
+        st.info("No SOP files found. Add .txt or .pdf files under `data/sops`.")
 
-def _normalize_cat(s: str) -> str:
-    # Trim and collapse internal whitespace; keep original casing
-    return re.sub(r"\s+", " ", (s or "General")).strip()
+    st.divider()
+    if st.button("Generate CLINI-Q Guidance", type="primary"):
+        plan = compose_guidance(role_label, scenario, answers, snippets)
 
-def load_faqs_from_csv(path: Path):
-    items_by_cat = {}
-    if path.exists():
-        with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                cat = _normalize_cat(row.get("category"))
-                title = (row.get("title") or "Untitled").strip()
-                body = (row.get("body") or "").strip()
-                sources_raw = (row.get("sources") or "").strip()
-                sources = [s.strip() for s in re.split(r"[;,]", sources_raw)] if sources_raw else []
-                items_by_cat.setdefault(cat, []).append(
-                    {"title": title, "body": body, "sources": sources}
-                )
-    return items_by_cat
+        st.success("Draft guidance generated.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("### Steps")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            for i, step in enumerate(plan.get("steps", []), 1):
+                st.markdown(f"**{i}.** {step}")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown("### FAQs")
-FAQ_CATEGORIES = load_faqs_from_csv(FAQ_CSV_PATH)
-if not FAQ_CATEGORIES:
-    st.info("No FAQs found. Add your CSV at `data/cliniq_faq.csv` with headers: category,title,body,sources.")
+            st.markdown("### Required Documentation")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            for d in plan.get("required_docs", []):
+                st.markdown(f"- {d}")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-# Sort categories alphabetically (case-insensitive)
-sorted_keys = sorted(FAQ_CATEGORIES.keys(), key=lambda s: s.lower())
+        with c2:
+            st.markdown("### Escalation Triggers")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            for e in plan.get("escalations", []):
+                st.markdown(f"- {e}")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-# Prefer to preselect “Participant FAQ pack” if it exists
-default_idx = sorted_keys.index("Participant FAQ pack") if "Participant FAQ pack" in sorted_keys else 0
+            st.markdown("### SOP Citations")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.write("; ".join(plan.get("citations", [])) or "-")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-faq_category = st.selectbox(
-    "Select an FAQ category:",
-    options=sorted_keys if sorted_keys else ["—"],
-    index=default_idx,
-    key="faq_category_select",
-)
-
-for item in FAQ_CATEGORIES.get(faq_category, []):
-    with st.expander(f"• {item.get('title','Untitled')}", expanded=False):
-        st.write(item.get("body", ""))
-        srcs = item.get("sources") or []
-        if srcs:
-            st.caption("Sources: " + " • ".join(srcs))
-
-st.markdown("---")
-
-# ===== Quick checklists =====
-st.markdown("### Checklists")
-
-with st.expander("✅ SIV/IMV Prep Checklist", expanded=False):
-    siv_items = [
-        "Protocol & latest amendment at hand",
-        "IB/IFU and key safety pages bookmarked",
-        "Regulatory binder index aligned with sponsor",
-        "Delegation log current; training documented",
-        "Central lab kits / shipping supplies verified",
-        "eSource/eCRF access tested; roles provisioned",
-        "Device/IP accountability forms prepared",
-        "Screening/enrollment logs printed or templated",
-        "Site emergency contacts posted and current",
-        "Action items tracker created for follow-ups",
-    ]
-    for i, t in enumerate(siv_items):
-        st.checkbox(t, key=f"siv_{i}")
-
-with st.expander("📦 IP Management Checklist", expanded=False):
-    ip_items = [
-        "Receipt logged; lot/expiry verified",
-        "Temperature logs in place; alarms tested",
-        "Storage conditions compliant (segregated/locked)",
-        "Accountability ledger initialized (receipt/dispense/return/destroy)",
-        "Randomization/unblinding process documented",
-        "Dispense labels match protocol & local regs",
-        "Return/destroy SOP and vendor contact available",
-        "Quarantine process defined for excursions",
-        "Daily reconciliation process scheduled",
-        "End-of-study reconciliation plan ready",
-    ]
-    for i, t in enumerate(ip_items):
-        st.checkbox(t, key=f"ip_{i}")
-
-st.markdown("---")
-
-# ===== Evidence search & guidance (unchanged) =====
-docs = load_documents(DATA_DIR)
-vectorizer, matrix, sources, corpus = build_index(docs)
-
-st.subheader("Search evidence from SOPs")
-st.write("Query:", query)
-snippets = retrieve(query, vectorizer, matrix, sources, corpus, k=k)
-
-if snippets:
-    for i, s in enumerate(snippets, 1):
-        with st.expander(f"{i}. {s.source}  (relevance {s.score:.2f})", expanded=(i==1)):
-            st.text(s.text[:2000] if s.text else "(no text)")
-else:
-    st.info("No SOP files found. Add .txt or .pdf files under `data/sops`.")
-
-st.divider()
-if st.button("Generate CLINI-Q Guidance", type="primary"):
-    plan = generate_guidance(role, query, snippets)
-    st.success("Draft guidance generated.")
-    st.markdown("### Step-by-step guidance")
-    for i, step in enumerate(plan.get("steps", []), 1):
-        st.markdown(f"**{i}.** {step}")
-    if plan.get("citations"):
-        st.markdown("### Citations")
-        st.write("; ".join(plan["citations"]))
-    if plan.get("compliance"):
-        st.markdown("### Compliance Reminders")
-        for item in plan["compliance"]:
+        st.markdown("### Compliance Reminder")
+        for item in plan.get("compliance", []):
             st.markdown(f"- {item}")
-    st.markdown(f"> {plan.get('disclaimer', '')}")
-else:
-    st.info("Adjust your scenario and click **Generate CLINI-Q Guidance**.")
+        st.markdown(f"> {plan.get('disclaimer', FINAL_VERIFICATION_LINE)}")
+    else:
+        st.info("Adjust your inputs and click **Generate CLINI-Q Guidance**.")
 
-st.divider()
-st.caption("MVP scope: No medical advice. No PHI/PII. Not a submission tool. Always verify locally.")
+    # Download chat history
+    if st.session_state["chat"]:
+        chat_text = ""
+        for m in st.session_state["chat"]:
+            who = "You" if m["role"] == "user" else "Assistant"
+            chat_text += f"{who}: {m['content']}\n\n"
+        b64 = base64.b64encode(chat_text.encode()).decode()
+        st.markdown(
+            f'<a href="data:file/txt;base64,{b64}" download="cliniq_chat_history.txt">📥 Download Chat History</a>',
+            unsafe_allow_html=True,
+        )
+
+    st.caption("© 2025 CLINIQ ⚖️Disclaimer: This is a demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
+
+# -------- import-safe entrypoint --------
+if __name__ == "__main__":
+    main()
