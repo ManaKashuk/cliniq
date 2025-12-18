@@ -350,21 +350,6 @@ def main():
                 f.write(uploaded.getbuffer())
             st.success(f"Uploaded: {uploaded.name}")
 
-            # Parse uploaded content like load_documents()
-            if save_path.suffix.lower() == ".txt":
-                try:
-                    uploaded_docs.append((save_path.name, save_path.read_text(encoding="utf-8", errors="ignore")))
-                except Exception:
-                    pass
-            elif save_path.suffix.lower() == ".pdf":
-                try:
-                    reader = PdfReader(str(save_path))
-                    pages = [page.extract_text() or "" for page in reader.pages]
-                    uploaded_docs.append((save_path.name, "
-".join(pages)))
-                except Exception:
-                    pass
-
     # --- Dynamic suggestions (classic) ---
     sel_df = faq_df if category == "All Categories" else faq_df[faq_df["Category"] == category]
     if not sel_df.empty and category != "All Categories":
