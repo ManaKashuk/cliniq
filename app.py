@@ -350,16 +350,16 @@ def main():
             else:
                 _show_bubble(msg["content"], icon_b64 or "")
 
-    # ----- SOP Retrieval & Guidance (unchanged from your classic flow) -----
+        # ----- SOP Retrieval & Guidance -----
     st.divider()
     docs = load_documents(DATA_DIR)
     vectorizer, matrix, sources, corpus = build_index(docs)
 
-    sop_query = f"{scenario} {ROLES[role_label]} SOP responsibilities documentation reporting"
+    sop_query = build_query(ROLES[role_label], scenario, answers)
     st.subheader("🔎 Search evidence from SOPs")
     st.write("Query:", sop_query)
 
-    snippets = retrieve(sop_query, vectorizer, matrix, sources, corpus, k=st.session_state["k_slider"])
+    snippets = retrieve(sop_query, vectorizer, matrix, sources, corpus, k=k)
     if snippets:
         for i, s in enumerate(snippets, 1):
             with st.expander(f"{i}. {s.source}  (relevance {s.score:.2f})", expanded=(i == 1)):
@@ -368,11 +368,11 @@ def main():
         st.info("No SOP files found. Add .txt or .pdf files under `data/sops`.")
 
     st.divider()
-    if st.button("Generate CLINI-Q Guidance", type="primary", key="guidance_btn"):
+    if st.button("Generate CLINI-Q Guidance", type="primary"):
         plan = compose_guidance(role_label, scenario, answers, snippets)
+
         st.success("Draft guidance generated.")
         c1, c2 = st.columns(2)
-
         with c1:
             st.markdown("### Steps")
             st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -380,29 +380,44 @@ def main():
                 st.markdown(f"**{i}.** {step}")
             st.markdown("</div>", unsafe_allow_html=True)
 
+            st.markdown("### Required Documentation")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            for d in plan.get("required_docs", []):
+                st.markdown(f"- {d}")
+            st.markdown("</div>", unsafe_allow_html=True)
+
         with c2:
+            st.markdown("### Escalation Triggers")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            for e in plan.get("escalations", []):
+                st.markdown(f"- {e}")
+            st.markdown("</div>", unsafe_allow_html=True)
+
             st.markdown("### SOP Citations")
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.write("; ".join(plan.get("citations", [])) or "-")
             st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("### Compliance")
+        st.markdown("### Compliance Reminder")
         for item in plan.get("compliance", []):
             st.markdown(f"- {item}")
         st.markdown(f"> {plan.get('disclaimer', FINAL_VERIFICATION_LINE)}")
-        # Download chat history
-        if st.session_state["chat"]:
-            chat_text = ""
-            for m in st.session_state["chat"]:
-                who = "You" if m["role"] == "user" else "Assistant"
-                chat_text += f"{who}: {m['content']}\n\n"
-            b64 = base64.b64encode(chat_text.encode()).decode()
-            st.markdown(
-                f'<a href="data:file/txt;base64,{b64}" download="cliniq_chat_history.txt">📥 Download Chat History</a>',
-                unsafe_allow_html=True,
-            )
+    else:
+        st.info("Adjust your inputs and click **Generate CLINI-Q Guidance**.")
 
-    st.caption("© 2025 CLINIQ • Demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
+    # Download chat history
+    if st.session_state["chat"]:
+        chat_text = ""
+        for m in st.session_state["chat"]:
+            who = "You" if m["role"] == "user" else "Assistant"
+            chat_text += f"{who}: {m['content']}\n\n"
+        b64 = base64.b64encode(chat_text.encode()).decode()
+        st.markdown(
+            f'<a href="data:file/txt;base64,{b64}" download="cliniq_chat_history.txt">📥 Download Chat History</a>',
+            unsafe_allow_html=True,
+        )
+
+    st.caption("© 2025 CLINIQ ⚖️Disclaimer: This is a demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
 
 # -------- entrypoint --------
 if __name__ == "__main__":
