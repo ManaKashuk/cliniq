@@ -261,7 +261,8 @@ def main():
     # Session state
     st.session_state.setdefault("chat", [])
     st.session_state.setdefault("suggested", [])
-    st.session_state.setdefault("last_category", "")
+    st.session_state.setdefault("last_role", None)
+    st.session_state.setdefault("last_category", None)
     st.session_state.setdefault("clear_input", False)
 
     # Sidebar: Category + Role + Scenario + Clarifiers
@@ -284,7 +285,14 @@ def main():
         st.subheader("Data & Keys")
         st.write(f"SOP directory: `{DATA_DIR}`")
         st.write("CSV: `cliniq_faq.csv` (Category, Question, Answer) placed next to this app file.")
-
+    # Detect role/category change to refresh prompts
+    role_changed = (st.session_state["last_role"] != role_code)
+    cat_changed  = (st.session_state["last_category"] != category)
+    if role_changed or cat_changed:
+        st.session_state["suggested"] = []    # clear any old suggestions
+        st.session_state["last_role"] = role_code
+        st.session_state["last_category"] = category
+  
 def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
     """
     Reads CSV with expected columns: Category, Question, Answer.
