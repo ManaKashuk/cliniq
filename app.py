@@ -113,6 +113,28 @@ def _show_bubble(html: str, avatar_b64: str):
         """,
         unsafe_allow_html=True,
     )
+    
+from difflib import get_close_matches
+
+def suggest_questions(query: str, pool: List[str], n: int = 5) -> List[str]:
+    """
+    Returns up to n similar questions from pool. Uses the same _norm() normalization
+    (dash/space-insensitive) and falls back to the first n questions if no close matches.
+    """
+    # map normalized -> original for stable lookup
+    norm_map = { _norm(x): x for x in pool }
+    candidates = get_close_matches(_norm(query), list(norm_map.keys()), n=n, cutoff=0.35)
+    if candidates:
+        return [norm_map[c] for c in candidates]
+
+    # fallback: just show the first n unique pool items
+    seen, out = set(), []
+    for q in pool:
+        if q not in seen:
+            out.append(q); seen.add(q)
+        if len(out) >= n:
+            break
+    return out
 
 # tolerant string normalizer (dash/space/case-insensitive)
 def _norm(s: str) -> str:
@@ -325,9 +347,10 @@ def main():
                                 st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
                                 answered = True
                     if not answered:
-                        st.session_state["chat"].append({"role": "assistant", "content": "I couldn't find a matching FAQ for that wording. Try another category or rephrase."})
-                    st.session_state["clear_input"] = True
-                    st.rerun()
+                        pool = sel_df["Question"].tolist() if not sel_df.empty else faq_df["Question"].tolist()
+                        alts = suggest_questions(s, pool, n=5)
+                        html = "I couldn't find a close match. Try one of these:<br>" + "<br>".join(f"• {q}" for q in alts)
+                        st.session_state["chat"].append({"role": "assistant", "content": html})
 
     # --- Manual question input ---
     question = st.text_input(
