@@ -1,56 +1,58 @@
+#!/usr/bin/env python3
+# CLINI-Q • SOP Navigator (clean, consolidated version)
+
 import os
+import csv
+import re
 import base64
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import streamlit as st
 import pandas as pd
 from PIL import Image
 from difflib import SequenceMatcher, get_close_matches
-import csv, re
+
 from pypdf import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# ------------------ CONFIG ------------------
-APP_TITLE = "CLINI-Q • SOP Navigator"
-ASSETS_DIR = Path(__file__).parent / "assets"
-ICON_PATH = ASSETS_DIR / "icon.png"                  # <-- put your icon here (used everywhere)
-LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"           # optional wide header logo (falls back to icon)
+# ------------------ PATHS & CONFIG ------------------
 ROOT_DIR = Path(__file__).parent
+ASSETS_DIR = ROOT_DIR / "assets"
+LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"
 
-# Look in repo root first, then data/
+# CSV: look in repo root first, then data/
 FAQ_CSV = ROOT_DIR / "cliniq_faq.csv"
 if not FAQ_CSV.exists():
     FAQ_CSV = ROOT_DIR / "data" / "cliniq_faq.csv"
 
-DEFAULT_SOP_DIR = Path(__file__).parent / "data" / "sops"
+DEFAULT_SOP_DIR = ROOT_DIR / "data" / "sops"
 DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
 
+APP_TITLE = "CLINI-Q • SOP Navigator"
 DISCLAIMER = (
     "This tool provides procedural guidance only. Do not use for clinical decisions or PHI. "
     "Always verify with your site SOPs and Principal Investigator (PI)."
 )
 FINAL_VERIFICATION_LINE = "Verify with your site SOP and PI before execution."
 
-# ------------------ ROLES ------------------
+# ------------------ ROLES & SCENARIOS ------------------
 ROLES = {
     "Clinical Research Coordinator (CRC)": "CRC",
     "Registered Nurse (RN)": "RN",
     "Administrator (Admin)": "ADMIN",
     "Trainee": "TRAINEE",
-    "Participant": "PARTICIPANT",
+    "Participant": "PARTICIPANT",  # NEW
 }
 
-# ------------------ SCENARIOS ------------------
 ROLE_SCENARIOS: Dict[str, List[str]] = {
     "CRC": ["IP shipment", "Missed visit", "Adverse event (AE) reporting", "Protocol deviation", "Monitoring visit preparation"],
     "RN": ["Pre-dose checks for IP", "AE identification and documentation", "Unblinding contingency", "Concomitant medication documentation"],
     "ADMIN": ["Delegation log management", "Regulatory binder maintenance", "Safety report distribution", "IRB submission packet assembly"],
     "TRAINEE": ["SOP basics: GCP overview", "Site initiation: required logs", "Source documentation fundamentals"],
-    # NEW (aligned with Participant FAQ pack):
     "PARTICIPANT": [
         "Missed/rescheduled visits — windows, documentation, safety checks",
         "Duration & schedule — calendars, visit frequency, conflicts in windows",
@@ -79,40 +81,16 @@ CLARIFYING_QUESTIONS: Dict[str, List[Dict[str, List[str]]]] = {
         {"Related to IP?": ["Related", "Not related", "Unknown"]},
         {"Expectedness (per IB)?": ["Expected", "Unexpected", "Unknown"]},
     ],
-    "Protocol deviation": [
-        {"Deviation type?": ["Minor", "Major"]},
-        {"Discovered by?": ["Self-identified", "Monitor", "Sponsor", "IRB", "Other"]},
-        {"Subject safety impacted?": ["Yes", "No", "Unknown"]},
-    ],
-    "Monitoring visit preparation": [
-        {"Visit type?": ["SIV", "IMV", "COV"]},
-        {"Remote or on-site?": ["Remote", "On-site"]},
-        {"Pre-visit docs prepared?": ["Yes", "No"]},
-    ],
-    "Pre-dose checks for IP": [
-        {"Dosing day?": ["Screening", "Baseline", "Treatment day", "Other"]},
-        {"Pre-dose labs within window?": ["Yes", "No", "Unknown"]},
-        {"Eligibility confirmed?": ["Yes", "No", "Pending PI sign-off"]},
-    ],
-    "Delegation log management": [
-        {"New team member?": ["Yes", "No"]},
-        {"Training complete?": ["Yes", "No", "In progress"]},
-        {"Signature captured?": ["Wet ink", "eSign", "Not captured"]},
-    ],
-    "SOP basics: GCP overview": [
-        {"Prior experience?": ["None", "<1 year", "1–3 years", "3+ years"]},
-    ],
-    # Participant flows use FAQ content primarily; no strict clarifiers here to keep UI light.
 }
 
-# ------------------ TYPES ------------------
+# ------------------ DATA TYPES ------------------
 @dataclass
 class Snippet:
     text: str
     source: str
     score: float
 
-# ------------------ IMAGE/STYLE HELPERS ------------------
+# ------------------ HELPERS ------------------
 def _img_to_b64(path: Path) -> str:
     try:
         img = Image.open(path)
@@ -122,28 +100,37 @@ def _img_to_b64(path: Path) -> str:
     except Exception:
         return ""
 
-def _load_page_icon():
-    try:
-        if ICON_PATH.exists():
-            return Image.open(ICON_PATH)
-    except Exception:
-        pass
-    return "🧭"
+def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
+    """
+    Reads CSV with expected columns: Category, Question, Answer.
+    If a row has more than 3 columns (because Answer contains commas),
+    extra columns are joined back into Answer.
+    """
+    rows = []
+    if not path.exists():
+        return pd.DataFrame(columns=["Category", "Question", "Answer"])
 
-def _show_bubble(html: str, avatar_b64: str):
-    st.markdown(
-        f"""
-        <div style='display:flex;align-items:flex-start;margin:10px 0;'>
-            <img src='data:image/png;base64,{avatar_b64}' width='40' style='margin-right:10px;border-radius:8px;'/>
-            <div style='background:#f6f6f6;padding:12px;border-radius:120px;max-width:75%;'>
-                {html}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
+        reader = csv.reader(f)
+        _ = next(reader, None)  # skip header row
+        for raw in reader:
+            if not raw or all(not c.strip() for c in raw):
+                continue
+            if len(raw) == 1:
+                raw = [c.strip() for c in raw[0].split(",")]
+            if len(raw) < 3:
+                raw += [""] * (3 - len(raw))
+            cat = raw[0].strip()
+            q   = raw[1].strip()
+            ans = ",".join(raw[2:]).strip()
+            rows.append([cat, q, ans])
 
-# ------------------ KNOWLEDGE ------------------
+    df = pd.DataFrame(rows, columns=["Category", "Question", "Answer"]).fillna("")
+    df["Category"] = df["Category"].str.replace(r"\s+", " ", regex=True).str.strip()
+    df["Question"] = df["Question"].str.strip()
+    df["Answer"]   = df["Answer"].str.strip()
+    return df
+
 @st.cache_data(show_spinner=False)
 def load_documents(data_dir: Path) -> List[Tuple[str, str]]:
     docs: List[Tuple[str, str]] = []
@@ -180,11 +167,6 @@ def retrieve(query: str, vectorizer, matrix, sources, corpus, k: int = 5) -> Lis
     idxs = sims.argsort()[::-1][:k]
     return [Snippet(text=corpus[i][:2000], source=sources[i], score=float(sims[i])) for i in idxs]
 
-def build_query(role_code: str, scenario: str, answers: Dict[str, str]) -> str:
-    terms = [role_code, scenario] + [t for kv in answers.items() for t in kv]
-    hint = " ".join(terms)
-    return f"{scenario} {role_code} {hint} SOP section responsibilities documentation reporting"
-
 def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], snippets: List[Snippet]) -> dict:
     role_short = ROLES.get(role_label, role_label)
     cites = sorted({f"Source: {s.source}" for s in snippets})
@@ -195,345 +177,192 @@ def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], sn
         "Record actions with date/time, signer, and cross-references in source records.",
         "Escalate uncertainties to PI/medical lead and document guidance.",
     ]
-    docs = [
-        "Source notes capturing who/what/when/why.",
-        "Role-specific log(s) (e.g., delegation, accountability, AE/SAE form).",
-        "Correspondence record (e.g., email to sponsor/CRO/IRB) if applicable.",
-    ]
-    escalations = [
-        "Potential subject safety impact.",
-        "Regulatory/IRB reporting thresholds met or unclear.",
-        "Protocol-required timelines at risk (e.g., SAE 24-hour reporting).",
-    ]
-    compliance = [
-        "Adhere to ICH-GCP E6(R2) and site SOPs.",
-        "Use site-approved templates; maintain confidentiality (no PHI in this tool).",
-        "Cite SOP section(s) in source; retain chain of custody where relevant.",
-    ]
     return {
         "steps": steps,
-        "required_docs": docs,
-        "escalations": escalations,
         "citations": cites,
-        "compliance": compliance,
+        "compliance": [
+            "Adhere to ICH-GCP E6(R2) and site SOPs.",
+            "Use site-approved templates; maintain confidentiality (no PHI in this tool).",
+        ],
         "disclaimer": FINAL_VERIFICATION_LINE,
     }
 
-def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
-    """
-    Reads CSV with expected columns: Category, Question, Answer.
-    If a row has more than 3 columns (because the Answer contains commas),
-    extra columns are joined back into the Answer field.
-    """
-    rows = []
-    if not path.exists():
-        return pd.DataFrame(columns=["Category", "Question", "Answer"])
-
-    with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
-        reader = csv.reader(f)
-        _ = next(reader, None)  # skip header row
-        for raw in reader:
-            if not raw or all(not c.strip() for c in raw):
-                continue
-            # if whole line landed in one cell, split on commas
-            if len(raw) == 1:
-                raw = [c.strip() for c in raw[0].split(",")]
-            # ensure at least 3 fields
-            if len(raw) < 3:
-                raw += [""] * (3 - len(raw))
-            cat = raw[0].strip()
-            q   = raw[1].strip()
-            ans = ",".join(raw[2:]).strip()  # join any extra columns
-            rows.append([cat, q, ans])
-
-    df = pd.DataFrame(rows, columns=["Category", "Question", "Answer"]).fillna("")
-    # normalize whitespace
-    df["Category"] = df["Category"].str.replace(r"\s+", " ", regex=True).str.strip()
-    df["Question"] = df["Question"].str.strip()
-    df["Answer"]   = df["Answer"].str.strip()
-    return df
-
-# ------------------ APP ------------------
+# ------------------ MAIN APP ------------------
 def main():
-    st.set_page_config(page_title=APP_TITLE, page_icon=_load_page_icon(), layout="wide")
+    st.set_page_config(page_title=APP_TITLE, page_icon="🧭", layout="wide")
 
-    icon_b64 = _img_to_b64(ICON_PATH)
-    logo_b64 = _img_to_b64(LOGO_PATH) or icon_b64
-
-    # Header with icon (MSU-style left alignment)
+    # --- Hero (RISe-like) ---
     st.markdown(
         """
         <style>
           .hero { text-align:left; margin-top:.3rem; }
           .hero h1 { font-size:2.05rem; font-weight:800; margin:0; }
-          .hero p  { font-size:1.4rem; color:#333; max-width:2000px; margin:.25rem 0 0 0; }
+          .hero p  { font-size:1.05rem; color:#333; max-width:1200px; margin:.35rem 0 0 0; }
           .divider-strong { border-top:4px solid #222; margin:.4rem 0 1.0rem; }
           .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
         </style>
         """,
         unsafe_allow_html=True,
     )
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), width=420)
     st.markdown(
-        f"""
-        <div class="hero-wrap">
-            <img src="data:image/png;base64,{(logo_b64 or icon_b64)}" style="height:164px;border-radius:8px;"/>
-            <div class="hero">
-                <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
-                <p> 🛡️I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, helping research teams navigate essential documentation, regulatory requirements, and Good Clinical Practice (GCP) standards with clarity and confidence.🛡️</p>
-            </div>
+        """
+        <div class="hero">
+          <h1>🛡️ CLINI-Q Clinical Trial SOP Assistant 🛡️</h1>
+          <p>💡 Smart Assistant for Clinical Trial SOP Navigation</p>
+          <p>I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, helping research teams navigate essential documentation, regulatory requirements, and Good Clinical Practice (GCP) standards with clarity and confidence.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
     st.caption(DISCLAIMER)
-    # Upload (optional)
-    uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
-    if uploaded:
-        st.success(f"Uploaded file: {uploaded.name}")
 
-    # Session state
+    # --- Session defaults ---
     st.session_state.setdefault("chat", [])
     st.session_state.setdefault("suggested", [])
     st.session_state.setdefault("last_role", None)
     st.session_state.setdefault("last_category", None)
     st.session_state.setdefault("clear_input", False)
 
-    # Sidebar: Category + Role + Scenario + Clarifiers
+    # --- Sidebar ---
     with st.sidebar:
         st.header("User Setup")
-        faq_df = load_faq_csv_tolerant(FAQ_CSV)  # <— now callable here
-        categories = ["All Categories"] + sorted(faq_df["Category"].unique().tolist()) if not faq_df.empty else ["All Categories"]
-        category = st.selectbox("📂 Knowledge category (optional)", categories)
-        role_label = st.selectbox("🎭 Your role", list(ROLES.keys()))
+
+        # Load FAQ CSV (robust)
+        faq_df = load_faq_csv_tolerant(FAQ_CSV)
+        if isinstance(faq_df, pd.DataFrame) and not faq_df.empty and "Category" in faq_df.columns:
+            categories = ["All Categories"] + sorted(faq_df["Category"].unique().tolist())
+        else:
+            categories = ["All Categories"]
+
+        category = st.selectbox("📂 Knowledge category (optional)", categories, key="category_select")
+
+        role_label = st.selectbox("🎭 Your role", list(ROLES.keys()), index=list(ROLES.keys()).index("Participant"), key="role_select")
         role_code = ROLES[role_label]
         scenario_list = ROLE_SCENARIOS.get(role_code, [])
-        scenario = st.selectbox("📌 Scenario", scenario_list if scenario_list else ["—"])
-        st.subheader("Clarifying questions")
+        scenario = st.selectbox("📌 Scenario", scenario_list if scenario_list else ["—"], key="scenario_select")
+
+        # Clarifying questions (mostly non-participant scenarios)
         answers: Dict[str, str] = {}
         for qdef in CLARIFYING_QUESTIONS.get(scenario, []):
             for q, opts in qdef.items():
-                answers[q] = st.selectbox(q, opts, key=f"q_{q}")
-        k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
+                answers[q] = st.selectbox(q, opts, key=f"clar_{q}")
+
+        k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1, key="k_slider")
+
+        # Track changes to refresh dynamic prompts
+        role_changed = (st.session_state["last_role"] != role_code)
+        cat_changed  = (st.session_state["last_category"] != category)
+        if role_changed or cat_changed:
+            st.session_state["suggested"] = []
+            st.session_state["last_role"] = role_code
+            st.session_state["last_category"] = category
+
         st.divider()
         st.subheader("Data & Keys")
         st.write(f"SOP directory: `{DATA_DIR}`")
-        st.write("CSV: `cliniq_faq.csv` (Category, Question, Answer) placed next to this app file.")
-    # Detect role/category change to refresh prompts
-    role_changed = (st.session_state["last_role"] != role_code)
-    cat_changed  = (st.session_state["last_category"] != category)
-    if role_changed or cat_changed:
-        st.session_state["suggested"] = []    # clear any old suggestions
-        st.session_state["last_role"] = role_code
-        st.session_state["last_category"] = category
-    # ===== Dynamic prompts based on Category -> FAQ, else Role -> ROLE_SCENARIOS =====
-    # We need the CSV data available here; reuse faq_df from the sidebar or reload if needed
-    try:
+        st.write("FAQ CSV: `cliniq_faq.csv` (Category, Question, Answer)")
+
+    # ---- Dynamic prompts ----
+    if isinstance(faq_df, pd.DataFrame) and not faq_df.empty and "Category" in faq_df.columns:
         sel_df = faq_df if category == "All Categories" else faq_df[faq_df["Category"] == category]
-    except NameError:
-        # Fallback if faq_df isn't in scope here
-        sel_df = pd.DataFrame(columns=["Category","Question","Answer"])
-    
+    else:
+        sel_df = pd.DataFrame(columns=["Category", "Question", "Answer"])
+
     suggestions: List[str] = []
-    
     if not sel_df.empty and category != "All Categories":
-        # Category-specific prompts from FAQ questions
         suggestions = sel_df["Question"].head(4).tolist()
     else:
-        # Role-based fallbacks
         role_list = ROLE_SCENARIOS.get(role_code, [])
         suggestions = [f"What are the steps for {s}?" for s in role_list[:4]]
-    
+
     if suggestions:
         st.markdown("#### Try asking one of these:")
         cols = st.columns(min(4, len(suggestions)))
         for i, s in enumerate(suggestions):
             with cols[i % len(cols)]:
                 if st.button(s, key=f"sugg_{role_code}_{category}_{i}", use_container_width=True):
-                    # If you have a text_input for the question, you can push to chat directly or set a value
                     st.session_state["chat"].append({"role": "user", "content": s})
-                    # If the exact FAQ exists, show answer immediately
+                    # Instant FAQ answer if exact match exists
                     if not sel_df.empty and s in sel_df["Question"].values:
                         ans = sel_df[sel_df["Question"] == s].iloc[0]["Answer"]
                         st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
                     st.session_state["clear_input"] = True
                     st.rerun()
 
-    # Session state
-    st.session_state.setdefault("chat", [])
-    st.session_state.setdefault("suggested", [])
-    st.session_state.setdefault("last_category", "")
-    st.session_state.setdefault("clear_input", False)
-
-    # Sidebar: Category + Role + Scenario + Clarifiers
-    with st.sidebar:
-        st.header("User Setup")
-
-        try:
-            faq_df = load_faq_csv_tolerant(FAQ_CSV)
-            categories = ["All Categories"] + sorted(faq_df["Category"].unique().tolist())
-        except Exception:
-            faq_df = pd.DataFrame(columns=["Category", "Question", "Answer"])
-            categories = ["All Categories"]
-
-        category = st.selectbox("📂 Knowledge category (optional)", categories)
-
-        role_label = st.selectbox("🎭 Your role", list(ROLES.keys()))
-        role_code = ROLES[role_label]
-        scenario_list = ROLE_SCENARIOS.get(role_code, [])
-        scenario = st.selectbox("📌 Scenario", scenario_list if scenario_list else ["—"])
-
-        st.subheader("Clarifying questions")
-        answers: Dict[str, str] = {}
-        for qdef in CLARIFYING_QUESTIONS.get(scenario, []):
-            for q, opts in qdef.items():
-                answers[q] = st.selectbox(q, opts, key=f"q_{q}")
-
-        k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
-        st.divider()
-        st.subheader("Data & Keys")
-        st.write(f"SOP directory: `{DATA_DIR}`")
-        st.write("CSV: `cliniq_faq.csv` (Category, Question, Answer) placed next to this app file.")
-
-    if st.session_state["last_category"] != category:
-        st.session_state["chat"] = []
-        st.session_state["suggested"] = []
-        st.session_state["last_category"] = category
-
-    # Chat input + suggestions
+    # ---- Manual question box ----
+    seed = ""
     question = st.text_input(
         "💬 What would you like me to help you with?",
-        value="" if st.session_state["clear_input"] else "",
+        value=seed,
         placeholder="Ask about steps, documentation, reporting timelines…",
+        key="free_text",
     )
-    st.session_state["clear_input"] = False
-
-    selected_df = (
-        faq_df if faq_df.empty or category == "All Categories"
-        else faq_df[faq_df["Category"] == category]
-    )
-
-    if not question.strip():
-        st.markdown("💬 Try asking one of these:")
-        examples = (
-            selected_df["Question"].head(3).tolist()
-            if not selected_df.empty
-            else [f"What are the steps for {s}?" for s in ROLE_SCENARIOS.get(role_code, [])[:3]]
-        )
-        cols = st.columns(len(examples)) if examples else []
-        for i, q in enumerate(examples):
-            if st.button(q, key=f"ex_{i}"):
-                st.session_state["chat"].append({"role": "user", "content": q})
-                if not selected_df.empty and q in selected_df["Question"].values:
-                    ans = selected_df[selected_df["Question"] == q].iloc[0]["Answer"]
-                    st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
-                st.session_state["clear_input"] = True
-                st.rerun()
-    if suggestions:
-        st.markdown("#### Try asking one of these:")
-        ...
-        if st.button(s, key=f"sugg_{role_code}_{category}_{i}", use_container_width=True):
-            st.session_state["chat"].append({"role":"user","content": s})
-            if not sel_df.empty and s in sel_df["Question"].values:
-                ans = sel_df[sel_df["Question"] == s].iloc[0]["Answer"]
-                st.session_state["chat"].append({"role":"assistant","content": f"<b>Answer:</b> {ans}"})
-            st.session_state["clear_input"] = True
-            st.rerun()
-
-    # Show chat
-    st.markdown("<div style='margin-top:10px;'>", unsafe_allow_html=True)
-    for msg in st.session_state["chat"]:
-        if msg["role"] == "user":
-            st.markdown(
-                f"""
-                <div style='text-align:right;margin:10px 0;'>
-                    <div style='display:inline-block;background:#e6f7ff;padding:12px;border-radius:12px;max-width:75%;'>
-                        <b>You:</b> {msg['content']}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        else:
-            _show_bubble(msg["content"], icon_b64 or "")
-
-    # Autocomplete suggestions on typing
-    if question.strip() and not selected_df.empty:
-        matches = [q for q in selected_df["Question"].tolist() if question.lower() in q.lower()][:5]
-        if matches:
-            st.markdown("<div style='margin-top:5px;'><b>Suggestions:</b></div>", unsafe_allow_html=True)
-            for s in matches:
-                if st.button(s, key=f"suggest_{s}"):
-                    st.session_state["chat"].append({"role": "user", "content": s})
-                    ans = selected_df[selected_df["Question"] == s].iloc[0]["Answer"]
-                    st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
-                    st.session_state["clear_input"] = True
-                    st.rerun()
-
-    # Submit → exact/close match from CSV
-    if st.button("Submit") and question.strip():
+    if st.button("Submit", key="submit_btn") and question.strip():
         st.session_state["chat"].append({"role": "user", "content": question})
-        prev_suggestions = st.session_state["suggested"]
-        st.session_state["suggested"] = []
-        st.session_state["clear_input"] = True
-
-        if not selected_df.empty:
-            all_q = selected_df["Question"].tolist()
+        if not sel_df.empty:
+            all_q = sel_df["Question"].tolist()
             best, score = None, 0.0
             for q in all_q:
                 s = SequenceMatcher(None, question.lower(), q.lower()).ratio()
                 if s > score:
                     best, score = q, s
             if best and score >= 0.85:
-                row = selected_df[selected_df["Question"] == best].iloc[0]
-                html = f"<b>Answer:</b> {row['Answer']}<br><i>(Category: {row['Category']})</i>"
-                st.session_state["chat"].append({"role": "assistant", "content": html})
+                ans = sel_df[sel_df["Question"] == best].iloc[0]["Answer"]
+                st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
             else:
-                if prev_suggestions:
-                    sq = prev_suggestions[0]
-                    row = faq_df[faq_df["Question"] == sq].iloc[0]
-                    html = f"<b>Answer:</b> {row['Answer']}<br><i>(Category: {row['Category']})</i>"
-                    st.session_state["chat"].append({"role": "assistant", "content": html})
+                top = get_close_matches(question, all_q, n=3, cutoff=0.45)
+                if top:
+                    msg = (
+                        "I couldn't find an exact match. Here are similar questions:<br>"
+                        + "<br>".join(f"{i}. {t}" for i, t in enumerate(top, start=1))
+                        + "<br>Click a suggestion above or refine your query."
+                    )
+                    st.session_state["chat"].append({"role": "assistant", "content": msg})
                 else:
-                    top = get_close_matches(question, faq_df["Question"].tolist(), n=3, cutoff=0.4)
-                    if top:
-                        guessed_cat = faq_df[faq_df["Question"] == top[0]].iloc[0]["Category"]
-                        html = (
-                            f"I couldn't find an exact match, but your question seems related to <b>{guessed_cat}</b>.<br><br>"
-                            "Here are similar questions:<br>" +
-                            "".join(f"{i}. {q}<br>" for i, q in enumerate(top, start=1)) +
-                            "<br>Select one below to see its answer."
-                        )
-                        st.session_state["chat"].append({"role": "assistant", "content": html})
-                        st.session_state["suggested"] = top
-                    else:
-                        st.session_state["chat"].append({"role": "assistant", "content": "I couldn't find a close match. Please try rephrasing."})
-        else:
-            st.session_state["chat"].append({"role": "assistant", "content": "Thanks—see SOP-based guidance below."})
-
+                    st.session_state["chat"].append({"role": "assistant", "content": "No close match found in the selected category."})
         st.rerun()
 
-    # Buttons for suggested similar questions
-    if st.session_state["suggested"]:
-        st.markdown("<div style='margin-top:15px;'><b>Choose a question:</b></div>", unsafe_allow_html=True)
-        for i, q in enumerate(st.session_state["suggested"]):
-            if st.button(q, key=f"choice_{i}"):
-                row = faq_df[faq_df["Question"] == q].iloc[0]
-                st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {row['Answer']}"})
-                st.session_state["suggested"] = []
-                st.session_state["clear_input"] = True
-                st.rerun()
+    # ---- Chat render ----
+    if st.session_state["chat"]:
+        st.divider()
+        st.subheader("Conversation")
+        for msg in st.session_state["chat"]:
+            if msg["role"] == "user":
+                st.markdown(
+                    f"""
+                    <div style='text-align:right;margin:10px 0;'>
+                        <div style='display:inline-block;background:#e6f7ff;padding:12px;border-radius:12px;max-width:75%;'>
+                            <b>You:</b> {msg['content']}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"""
+                    <div style='display:flex;align-items:flex-start;margin:10px 0;'>
+                        <div style='background:#f6f6f6;padding:12px;border-radius:12px;max-width:75%;'>
+                            {msg['content']}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-    # ----- SOP Retrieval & Guidance -----
+    # ---- SOP retrieval & guidance ----
     st.divider()
     docs = load_documents(DATA_DIR)
     vectorizer, matrix, sources, corpus = build_index(docs)
 
-    sop_query = build_query(ROLES[role_label], scenario, answers)
+    sop_query = f"{scenario} {ROLES[role_label]} SOP responsibilities documentation reporting"
     st.subheader("🔎 Search evidence from SOPs")
     st.write("Query:", sop_query)
 
-    snippets = retrieve(sop_query, vectorizer, matrix, sources, corpus, k=k)
+    snippets = retrieve(sop_query, vectorizer, matrix, sources, corpus, k=st.session_state["k_slider"])
     if snippets:
         for i, s in enumerate(snippets, 1):
             with st.expander(f"{i}. {s.source}  (relevance {s.score:.2f})", expanded=(i == 1)):
@@ -542,11 +371,11 @@ def main():
         st.info("No SOP files found. Add .txt or .pdf files under `data/sops`.")
 
     st.divider()
-    if st.button("Generate CLINI-Q Guidance", type="primary"):
+    if st.button("Generate CLINI-Q Guidance", type="primary", key="guidance_btn"):
         plan = compose_guidance(role_label, scenario, answers, snippets)
-
         st.success("Draft guidance generated.")
         c1, c2 = st.columns(2)
+
         with c1:
             st.markdown("### Steps")
             st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -554,45 +383,19 @@ def main():
                 st.markdown(f"**{i}.** {step}")
             st.markdown("</div>", unsafe_allow_html=True)
 
-            st.markdown("### Required Documentation")
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            for d in plan.get("required_docs", []):
-                st.markdown(f"- {d}")
-            st.markdown("</div>", unsafe_allow_html=True)
-
         with c2:
-            st.markdown("### Escalation Triggers")
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            for e in plan.get("escalations", []):
-                st.markdown(f"- {e}")
-            st.markdown("</div>", unsafe_allow_html=True)
-
             st.markdown("### SOP Citations")
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.write("; ".join(plan.get("citations", [])) or "-")
             st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("### Compliance Reminder")
+        st.markdown("### Compliance")
         for item in plan.get("compliance", []):
             st.markdown(f"- {item}")
         st.markdown(f"> {plan.get('disclaimer', FINAL_VERIFICATION_LINE)}")
-    else:
-        st.info("Adjust your inputs and click **Generate CLINI-Q Guidance**.")
 
-    # Download chat history
-    if st.session_state["chat"]:
-        chat_text = ""
-        for m in st.session_state["chat"]:
-            who = "You" if m["role"] == "user" else "Assistant"
-            chat_text += f"{who}: {m['content']}\n\n"
-        b64 = base64.b64encode(chat_text.encode()).decode()
-        st.markdown(
-            f'<a href="data:file/txt;base64,{b64}" download="cliniq_chat_history.txt">📥 Download Chat History</a>',
-            unsafe_allow_html=True,
-        )
+    st.caption("© 2025 CLINIQ • Demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
 
-    st.caption("© 2025 CLINIQ ⚖️Disclaimer: This is a demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
-
-# -------- import-safe entrypoint --------
+# -------- entrypoint --------
 if __name__ == "__main__":
     main()
