@@ -36,7 +36,7 @@ DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
 APP_TITLE = "CLINI-Q • SOP Navigator"
 DISCLAIMER = (
     "This tool provides procedural guidance only. Do not use for clinical decisions or PHI. "
-    "Always verify with your site SOPs and Principal Investigator (PI). CLINI-Q does not auto-join meetings or record audio."
+    "Always verify with your site SOPs and Principal Investigator (PI)."
 )
 FINAL_VERIFICATION_LINE = "Verify with your site SOP and PI before execution."
 
@@ -267,7 +267,7 @@ def main():
         <style>
           .hero { text-align:left; margin-top:.3rem; }
           .hero h1 { font-size:2.05rem; font-weight:800; margin:0; }
-          .hero p  { font-size:1.25rem; color:#333; max-width:2000px; margin:.35rem 0 0 0; }
+          .hero p  { font-size:1.3rem; color:#333; max-width:2000px; margin:.35rem 0 0 0; }
           .divider-strong { border-top:4px solid #222; margin:.4rem 0 1.0rem; }
           .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
         </style>
