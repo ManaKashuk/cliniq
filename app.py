@@ -20,7 +20,7 @@ ASSETS_DIR = Path(__file__).parent / "assets"
 ICON_PATH = ASSETS_DIR / "icon.png"                  # <-- put your icon here (used everywhere)
 LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"           # optional wide header logo (falls back to icon)
 
-FAQ_CSV = ROOT_DIR / "data" / "cliniq_faq.csv"
+FAQ_CSV = ROOT_DIR / "main" / "cliniq_faq.csv"
 DEFAULT_SOP_DIR = ROOT_DIR / "data" / "sops"
 DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
 
