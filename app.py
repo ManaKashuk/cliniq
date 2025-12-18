@@ -336,17 +336,6 @@ def main():
         uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
         if uploaded:
             st.success(f"Uploaded file: {uploaded.name}")
-        
-        # --- NEW: optional file uploader & indexing (pdf/txt only) ---
-        upload_dir = ROOT_DIR / "data" / "uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-
-        uploaded = st.file_uploader("📎 Upload a reference file (pdf/txt)", type=["pdf", "txt"], key="uploader")
-        if uploaded:
-            save_path = upload_dir / uploaded.name
-            with open(save_path, "wb") as f:
-                f.write(uploaded.getbuffer())
-            st.success(f"Uploaded: {uploaded.name}")
 
     # --- Dynamic suggestions (classic) ---
     sel_df = faq_df if category == "All Categories" else faq_df[faq_df["Category"] == category]
