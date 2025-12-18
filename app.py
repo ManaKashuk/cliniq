@@ -19,7 +19,6 @@ APP_TITLE = "CLINI-Q • SOP Navigator"
 ASSETS_DIR = Path(__file__).parent / "assets"
 ICON_PATH = ASSETS_DIR / "icon.png"                  # <-- put your icon here (used everywhere)
 LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"           # optional wide header logo (falls back to icon)
-ROOT_DIR = Path(__file__).parent
 
 # Look in repo root first, then data/
 FAQ_CSV = ROOT_DIR / "cliniq_faq.csv"
