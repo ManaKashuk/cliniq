@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# CLINI-Q • SOP Navigator  (updated: adds Participant role & scenarios; keeps original flow)
-
 import os
 import base64
 from io import BytesIO
@@ -12,7 +9,7 @@ import streamlit as st
 import pandas as pd
 from PIL import Image
 from difflib import SequenceMatcher, get_close_matches
-
+import csv, re
 from pypdf import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -23,8 +20,9 @@ ASSETS_DIR = Path(__file__).parent / "assets"
 ICON_PATH = ASSETS_DIR / "icon.png"                  # <-- put your icon here (used everywhere)
 LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"           # optional wide header logo (falls back to icon)
 
-# CSV location: keep as in your original app — place cliniq_faq.csv next to this .py file
-FAQ_CSV   = Path(__file__).parent / "cliniq_faq.csv"  # expected columns: Category, Question, Answer
+FAQ_CSV = ROOT_DIR / "data" / "cliniq_faq.csv"
+DEFAULT_SOP_DIR = ROOT_DIR / "data" / "sops"
+DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
 
 DEFAULT_SOP_DIR = Path(__file__).parent / "data" / "sops"
 DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
@@ -41,7 +39,6 @@ ROLES = {
     "Registered Nurse (RN)": "RN",
     "Administrator (Admin)": "ADMIN",
     "Trainee": "TRAINEE",
-    # NEW:
     "Participant": "PARTICIPANT",
 }
 
@@ -259,6 +256,40 @@ def main():
     if uploaded:
         st.success(f"Uploaded file: {uploaded.name}")
 
+def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
+    """
+    Reads CSV with expected columns: Category, Question, Answer.
+    If a row has more than 3 columns (because the Answer contains commas),
+    extra columns are joined back into the Answer field.
+    """
+    rows = []
+    if not path.exists():
+        return pd.DataFrame(columns=["Category", "Question", "Answer"])
+
+    with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)  # ignore header row
+        for raw in reader:
+            if not raw or all(not c.strip() for c in raw):
+                continue
+            # if the entire row slipped in as one cell, split on commas
+            if len(raw) == 1:
+                raw = [c.strip() for c in raw[0].split(",")]
+            # ensure at least 3 fields
+            if len(raw) < 3:
+                raw += [""] * (3 - len(raw))
+            cat = raw[0].strip()
+            q   = raw[1].strip()
+            ans = ",".join(raw[2:]).strip()   # join extras back into Answer
+            rows.append([cat, q, ans])
+
+    df = pd.DataFrame(rows, columns=["Category", "Question", "Answer"]).fillna("")
+    # normalize whitespace
+    df["Category"] = df["Category"].str.replace(r"\s+", " ", regex=True).str.strip()
+    df["Question"] = df["Question"].str.strip()
+    df["Answer"]   = df["Answer"].str.strip()
+    return df
+
     # Session state
     st.session_state.setdefault("chat", [])
     st.session_state.setdefault("suggested", [])
@@ -270,7 +301,7 @@ def main():
         st.header("User Setup")
 
         try:
-            faq_df = pd.read_csv(FAQ_CSV).fillna("")
+            faq_df = load_faq_csv_tolerant(FAQ_CSV)
             categories = ["All Categories"] + sorted(faq_df["Category"].unique().tolist())
         except Exception:
             faq_df = pd.DataFrame(columns=["Category", "Question", "Answer"])
