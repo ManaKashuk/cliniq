@@ -214,31 +214,6 @@ def build_query(role_code: str, scenario: str, answers: Dict[str, str]) -> str:
     hint = " ".join(terms)
     return f"{scenario} {role_code} {hint} SOP section responsibilities documentation reporting"
 
-# --- NEW: best-effort page match for citations ---
-def first_match_page(text: str, query_terms: List[str]) -> int:
-    chunks = text.split("
-")
-    q = "|".join([re.escape(t) for t in query_terms if t.strip()])
-    try:
-        pat = re.compile(q, re.IGNORECASE)
-    except re.error:
-        return -1
-    for i, chunk in enumerate(chunks, start=1):
-        if pat.search(chunk):
-            return i
-    return -1
-
-def build_citations(snippets: List[Snippet], query: str) -> List[str]:
-    query_terms = [w for w in re.split(r"\W+", query) if len(w) > 2]
-    cites = []
-    for s in snippets:
-        p = first_match_page(s.text, query_terms)
-        if p >= 1 and s.source.lower().endswith(".pdf"):
-            cites.append(f"Source: {s.source} (p. {p})")
-        else:
-            cites.append(f"Source: {s.source}")
-    return sorted(set(cites))
-
 # Guidance composer updated to accept query for citations
 
 def compose_guidance(role_label: str, scenario: str, answers: Dict[str, str], snippets: List[Snippet], query: str) -> dict:
