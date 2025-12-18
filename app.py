@@ -225,7 +225,7 @@ def main():
         <div class="hero-wrap">
             <img src="data:image/png;base64,{(logo_b64 or icon_b64)}" style="height:164px;border-radius:8px;"/>
             <div class="hero">
-                <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
+                <h1>💡Smart Assistant for Clinical Trial SOP Navigation</h1>
                 <p>I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, helping research teams navigate essential documentation, regulatory requirements, and."
             "Good Clinical Practice (GCP) standards with clarity and confidence.</p>
             </div>
