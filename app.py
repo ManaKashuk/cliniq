@@ -258,6 +258,33 @@ def main():
     if uploaded:
         st.success(f"Uploaded file: {uploaded.name}")
 
+    # Session state
+    st.session_state.setdefault("chat", [])
+    st.session_state.setdefault("suggested", [])
+    st.session_state.setdefault("last_category", "")
+    st.session_state.setdefault("clear_input", False)
+
+    # Sidebar: Category + Role + Scenario + Clarifiers
+    with st.sidebar:
+        st.header("User Setup")
+        faq_df = load_faq_csv_tolerant(FAQ_CSV)  # <— now callable here
+        categories = ["All Categories"] + sorted(faq_df["Category"].unique().tolist()) if not faq_df.empty else ["All Categories"]
+        category = st.selectbox("📂 Knowledge category (optional)", categories)
+        role_label = st.selectbox("🎭 Your role", list(ROLES.keys()))
+        role_code = ROLES[role_label]
+        scenario_list = ROLE_SCENARIOS.get(role_code, [])
+        scenario = st.selectbox("📌 Scenario", scenario_list if scenario_list else ["—"])
+        st.subheader("Clarifying questions")
+        answers: Dict[str, str] = {}
+        for qdef in CLARIFYING_QUESTIONS.get(scenario, []):
+            for q, opts in qdef.items():
+                answers[q] = st.selectbox(q, opts, key=f"q_{q}")
+        k = st.slider("Evidence snippets", min_value=3, max_value=10, value=5, step=1)
+        st.divider()
+        st.subheader("Data & Keys")
+        st.write(f"SOP directory: `{DATA_DIR}`")
+        st.write("CSV: `cliniq_faq.csv` (Category, Question, Answer) placed next to this app file.")
+
 def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
     """
     Reads CSV with expected columns: Category, Question, Answer.
