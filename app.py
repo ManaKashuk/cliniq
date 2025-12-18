@@ -325,33 +325,6 @@ def main():
                     st.session_state["clear_input"] = True
                     st.rerun()
 
-def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
-    """
-    Reads CSV with expected columns: Category, Question, Answer.
-    If a row has more than 3 columns (because the Answer contains commas),
-    extra columns are joined back into the Answer field.
-    """
-    rows = []
-    if not path.exists():
-        return pd.DataFrame(columns=["Category", "Question", "Answer"])
-
-    with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)  # ignore header row
-        for raw in reader:
-            if not raw or all(not c.strip() for c in raw):
-                continue
-            # if the entire row slipped in as one cell, split on commas
-            if len(raw) == 1:
-                raw = [c.strip() for c in raw[0].split(",")]
-            # ensure at least 3 fields
-            if len(raw) < 3:
-                raw += [""] * (3 - len(raw))
-            cat = raw[0].strip()
-            q   = raw[1].strip()
-            ans = ",".join(raw[2:]).strip()   # join extras back into Answer
-            rows.append([cat, q, ans])
-
     df = pd.DataFrame(rows, columns=["Category", "Question", "Answer"]).fillna("")
     # normalize whitespace
     df["Category"] = df["Category"].str.replace(r"\s+", " ", regex=True).str.strip()
@@ -429,6 +402,16 @@ def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
                     st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
                 st.session_state["clear_input"] = True
                 st.rerun()
+    if suggestions:
+        st.markdown("#### Try asking one of these:")
+        ...
+        if st.button(s, key=f"sugg_{role_code}_{category}_{i}", use_container_width=True):
+            st.session_state["chat"].append({"role":"user","content": s})
+            if not sel_df.empty and s in sel_df["Question"].values:
+                ans = sel_df[sel_df["Question"] == s].iloc[0]["Answer"]
+                st.session_state["chat"].append({"role":"assistant","content": f"<b>Answer:</b> {ans}"})
+            st.session_state["clear_input"] = True
+            st.rerun()
 
     # Show chat
     st.markdown("<div style='margin-top:10px;'>", unsafe_allow_html=True)
