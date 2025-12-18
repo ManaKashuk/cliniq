@@ -340,8 +340,6 @@ def main():
 
         st.divider()
         st.subheader("Data & Keys")
-        st.write(f"SOP directory: `{DATA_DIR}`")
-        st.write("FAQ CSV: `cliniq_faq.csv` (Category, Question, Answer)")
        
         # Upload hint (visual parity with MSU)
         uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
