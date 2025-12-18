@@ -292,7 +292,39 @@ def main():
         st.session_state["suggested"] = []    # clear any old suggestions
         st.session_state["last_role"] = role_code
         st.session_state["last_category"] = category
-  
+    # ===== Dynamic prompts based on Category -> FAQ, else Role -> ROLE_SCENARIOS =====
+    # We need the CSV data available here; reuse faq_df from the sidebar or reload if needed
+    try:
+        sel_df = faq_df if category == "All Categories" else faq_df[faq_df["Category"] == category]
+    except NameError:
+        # Fallback if faq_df isn't in scope here
+        sel_df = pd.DataFrame(columns=["Category","Question","Answer"])
+    
+    suggestions: List[str] = []
+    
+    if not sel_df.empty and category != "All Categories":
+        # Category-specific prompts from FAQ questions
+        suggestions = sel_df["Question"].head(4).tolist()
+    else:
+        # Role-based fallbacks
+        role_list = ROLE_SCENARIOS.get(role_code, [])
+        suggestions = [f"What are the steps for {s}?" for s in role_list[:4]]
+    
+    if suggestions:
+        st.markdown("#### Try asking one of these:")
+        cols = st.columns(min(4, len(suggestions)))
+        for i, s in enumerate(suggestions):
+            with cols[i % len(cols)]:
+                if st.button(s, key=f"sugg_{role_code}_{category}_{i}", use_container_width=True):
+                    # If you have a text_input for the question, you can push to chat directly or set a value
+                    st.session_state["chat"].append({"role": "user", "content": s})
+                    # If the exact FAQ exists, show answer immediately
+                    if not sel_df.empty and s in sel_df["Question"].values:
+                        ans = sel_df[sel_df["Question"] == s].iloc[0]["Answer"]
+                        st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
+                    st.session_state["clear_input"] = True
+                    st.rerun()
+
 def load_faq_csv_tolerant(path: Path) -> pd.DataFrame:
     """
     Reads CSV with expected columns: Category, Question, Answer.
