@@ -409,6 +409,17 @@ def main():
             else:
                 _show_bubble(msg["content"], icon_b64 or "")
 
+            # Download chat history (unchanged, visible under chat)
+    if st.session_state["chat"]:
+        chat_text = ""
+        for m in st.session_state["chat"]:
+            who = "You" if m["role"] == "user" else "Assistant"
+            chat_text += f"{who}: {m['content']}\n\n"
+        b64 = base64.b64encode(chat_text.encode()).decode()
+        st.markdown(
+            f'<a href="data:file/txt;base64,{b64}" download="cliniq_chat_history.txt">📥 Download Chat History</a>',
+            unsafe_allow_html=True,
+
     # ----- SOP Retrieval & Guidance -----
     st.divider()
     docs = load_documents(DATA_DIR)
