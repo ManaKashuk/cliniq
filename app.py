@@ -410,7 +410,7 @@ def main():
                 st.session_state["clear_input"] = True
                 st.rerun()
 
-    # ----- SOP Retrieval & Guidance -----
+       # ----- SOP Retrieval & Guidance -----
     st.divider()
     docs = load_documents(DATA_DIR)
     vectorizer, matrix, sources, corpus = build_index(docs)
@@ -465,7 +465,7 @@ def main():
     else:
         st.info("Adjust your inputs and click **Generate CLINI-Q Guidance**.")
 
-    # Download chat history
+    # Download chat history (unchanged, visible under chat)
     if st.session_state["chat"]:
         chat_text = ""
         for m in st.session_state["chat"]:
@@ -477,7 +477,7 @@ def main():
             unsafe_allow_html=True,
         )
 
-    st.caption("© 2025 CLINIQ ⚖️Disclaimer: This is a demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
+    st.caption("© 2025 CLINIQ ⚖️Disclaimer: This is a demo tool only. For official guidanceNo PHI/PII without accessing sensitive data. For official guidance, refer to your office policies.")
 
 # -------- import-safe entrypoint --------
 if __name__ == "__main__":
