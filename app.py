@@ -227,13 +227,13 @@ def main():
     icon_b64 = _img_to_b64(ICON_PATH)
     logo_b64 = _img_to_b64(LOGO_PATH) or icon_b64
 
-    # Hero (left-aligned logo + taglines;)
+    # Header with icon (MSU-style left alignment)
     st.markdown(
         """
         <style>
           .hero { text-align:left; margin-top:.3rem; }
           .hero h1 { font-size:2.05rem; font-weight:800; margin:0; }
-          .hero p  { font-size:1.4rem; color:#333; max-width:1200px; margin:.35rem 0 0 0; }
+          .hero p  { font-size:1rem; color:#333; max-width:980px; margin:.25rem 0 0 0; }
           .divider-strong { border-top:4px solid #222; margin:.4rem 0 1.0rem; }
           .card { border:1px solid #e5e7eb; border-radius:12px; padding:.8rem 1rem; background:#fff; }
         </style>
@@ -242,8 +242,8 @@ def main():
     )
     st.markdown(
         f"""
-        <div class="hero-wrap" style="display:flex;gap:16px;align-items:center;">
-            <img src="data:image/png;base64,{(logo_b64 or icon_b64)}" style="height:120px;border-radius:8px;"/>
+        <div class="hero-wrap">
+            <img src="data:image/png;base64,{(logo_b64 or icon_b64)}" style="height:164px;border-radius:8px;"/>
             <div class="hero">
                 <h1>💡 Smart Assistant for Clinical Trial SOP Navigation</h1>
                 <p> 🛡️I am trained on institutional Standard Operating Procedures (SOPs) and compliance frameworks, helping research teams navigate essential documentation, regulatory requirements, and Good Clinical Practice (GCP) standards with clarity and confidence.🛡️</p>
@@ -254,7 +254,6 @@ def main():
     )
     st.markdown('<div class="divider-strong"></div>', unsafe_allow_html=True)
     st.caption(DISCLAIMER)
-
     # Upload (optional)
     uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
     if uploaded:
