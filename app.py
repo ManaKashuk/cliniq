@@ -299,58 +299,118 @@ def main():
     # --- Manual question input (old flow) ---
     question = st.text_input(
         "💬 What would you like me to help you with?",
-        value="" if not st.session_state["clear_input"] else "",
+        value="" if st.session_state["clear_input"] else "",
         placeholder="Ask about steps, documentation, reporting timelines…",
-        key="free_text",
     )
     st.session_state["clear_input"] = False
 
-    if st.button("Submit", key="submit_btn") and question.strip():
+    selected_df = (
+        faq_df if faq_df.empty or category == "All Categories"
+        else faq_df[faq_df["Category"] == category]
+    )
+
+    if not question.strip():
+        st.markdown("💬 Try asking one of these:")
+        examples = (
+            selected_df["Question"].head(3).tolist()
+            if not selected_df.empty
+            else [f"What are the steps for {s}?" for s in ROLE_SCENARIOS.get(role_code, [])[:3]]
+        )
+        cols = st.columns(len(examples)) if examples else []
+        for i, q in enumerate(examples):
+            if st.button(q, key=f"ex_{i}"):
+                st.session_state["chat"].append({"role": "user", "content": q})
+                if not selected_df.empty and q in selected_df["Question"].values:
+                    ans = selected_df[selected_df["Question"] == q].iloc[0]["Answer"]
+                    st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
+                st.session_state["clear_input"] = True
+                st.rerun()
+
+    # Show chat
+    st.markdown("<div style='margin-top:10px;'>", unsafe_allow_html=True)
+    for msg in st.session_state["chat"]:
+        if msg["role"] == "user":
+            st.markdown(
+                f"""
+                <div style='text-align:right;margin:10px 0;'>
+                    <div style='display:inline-block;background:#e6f7ff;padding:12px;border-radius:12px;max-width:75%;'>
+                        <b>You:</b> {msg['content']}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            _show_bubble(msg["content"], icon_b64 or "")
+
+    # Autocomplete suggestions on typing
+    if question.strip() and not selected_df.empty:
+        matches = [q for q in selected_df["Question"].tolist() if question.lower() in q.lower()][:5]
+        if matches:
+            st.markdown("<div style='margin-top:5px;'><b>Suggestions:</b></div>", unsafe_allow_html=True)
+            for s in matches:
+                if st.button(s, key=f"suggest_{s}"):
+                    st.session_state["chat"].append({"role": "user", "content": s})
+                    ans = selected_df[selected_df["Question"] == s].iloc[0]["Answer"]
+                    st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
+                    st.session_state["clear_input"] = True
+                    st.rerun()
+
+    # Submit → exact/close match from CSV
+    if st.button("Submit") and question.strip():
         st.session_state["chat"].append({"role": "user", "content": question})
-        if not sel_df.empty:
-            all_q = sel_df["Question"].tolist()
+        prev_suggestions = st.session_state["suggested"]
+        st.session_state["suggested"] = []
+        st.session_state["clear_input"] = True
+
+        if not selected_df.empty:
+            all_q = selected_df["Question"].tolist()
             best, score = None, 0.0
             for q in all_q:
                 s = SequenceMatcher(None, question.lower(), q.lower()).ratio()
                 if s > score:
                     best, score = q, s
-            if best and score >= 0.75:
-                ans = sel_df[sel_df["Question"] == best].iloc[0]["Answer"]
-                st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {ans}"})
+            if best and score >= 0.85:
+                row = selected_df[selected_df["Question"] == best].iloc[0]
+                html = f"<b>Answer:</b> {row['Answer']}<br><i>(Category: {row['Category']})</i>"
+                st.session_state["chat"].append({"role": "assistant", "content": html})
             else:
-                top = get_close_matches(question, all_q, n=3, cutoff=0.45)
-                if top:
-                    msg = (
-                        "I couldn't find an exact match. Here are similar questions:<br>"
-                        + "<br>".join(f"{i}. {t}" for i, t in enumerate(top, start=1))
-                        + "<br>Click a suggestion above or refine your query."
-                    )
-                    st.session_state["chat"].append({"role": "assistant", "content": msg})
+                if prev_suggestions:
+                    sq = prev_suggestions[0]
+                    row = faq_df[faq_df["Question"] == sq].iloc[0]
+                    html = f"<b>Answer:</b> {row['Answer']}<br><i>(Category: {row['Category']})</i>"
+                    st.session_state["chat"].append({"role": "assistant", "content": html})
                 else:
-                    st.session_state["chat"].append({"role": "assistant", "content": "No close match found in the selected category."})
+                    top = get_close_matches(question, faq_df["Question"].tolist(), n=3, cutoff=0.4)
+                    if top:
+                        guessed_cat = faq_df[faq_df["Question"] == top[0]].iloc[0]["Category"]
+                        html = (
+                            f"I couldn't find an exact match, but your question seems related to <b>{guessed_cat}</b>.<br><br>"
+                            "Here are similar questions:<br>" +
+                            "".join(f"{i}. {q}<br>" for i, q in enumerate(top, start=1)) +
+                            "<br>Select one below to see its answer."
+                        )
+                        st.session_state["chat"].append({"role": "assistant", "content": html})
+                        st.session_state["suggested"] = top
+                    else:
+                        st.session_state["chat"].append({"role": "assistant", "content": "I couldn't find a close match. Please try rephrasing."})
+        else:
+            st.session_state["chat"].append({"role": "assistant", "content": "Thanks—see SOP-based guidance below."})
+
         st.rerun()
 
-    # --- Chat render (old bubble look with icon) ---
-    if st.session_state["chat"]:
-        st.divider()
-        st.subheader("Conversation")
-        icon_b64 = _img_to_b64(ICON_PATH)
-        for msg in st.session_state["chat"]:
-            if msg["role"] == "user":
-                st.markdown(
-                    f"""
-                    <div style='text-align:right;margin:10px 0;'>
-                        <div style='display:inline-block;background:#e6f7ff;padding:12px;border-radius:12px;max-width:75%;'>
-                            <b>You:</b> {msg['content']}
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            else:
-                _show_bubble(msg["content"], icon_b64 or "")
+    # Buttons for suggested similar questions
+    if st.session_state["suggested"]:
+        st.markdown("<div style='margin-top:15px;'><b>Choose a question:</b></div>", unsafe_allow_html=True)
+        for i, q in enumerate(st.session_state["suggested"]):
+            if st.button(q, key=f"choice_{i}"):
+                row = faq_df[faq_df["Question"] == q].iloc[0]
+                st.session_state["chat"].append({"role": "assistant", "content": f"<b>Answer:</b> {row['Answer']}"})
+                st.session_state["suggested"] = []
+                st.session_state["clear_input"] = True
+                st.rerun()
 
-        # ----- SOP Retrieval & Guidance -----
+    # ----- SOP Retrieval & Guidance -----
     st.divider()
     docs = load_documents(DATA_DIR)
     vectorizer, matrix, sources, corpus = build_index(docs)
@@ -419,6 +479,6 @@ def main():
 
     st.caption("© 2025 CLINIQ ⚖️Disclaimer: This is a demo tool only. No PHI/PII. For official guidance, refer to your office policies.")
 
-# -------- entrypoint --------
+# -------- import-safe entrypoint --------
 if __name__ == "__main__":
     main()
