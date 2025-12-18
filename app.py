@@ -361,6 +361,10 @@ def main():
         st.subheader("Data & Keys")
         st.write(f"SOP directory: `{DATA_DIR}`")
         st.write("FAQ CSV: `cliniq_faq.csv` (Category, Question, Answer)")
+        
+        # Upload hint (visual parity with MSU)
+        uploaded = st.file_uploader("📎 Upload a reference file (optional)", type=["pdf", "docx", "txt"])
+        ifif uploaded:
 
         # --- NEW: optional file uploader & indexing (pdf/txt only) ---
         upload_dir = ROOT_DIR / "data" / "uploads"
