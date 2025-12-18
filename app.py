@@ -3,6 +3,7 @@ import base64
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
+ROOT_DIR = Path(__file__).parent
 from typing import Dict, List, Tuple, Optional
 
 import streamlit as st
@@ -20,9 +21,10 @@ ASSETS_DIR = Path(__file__).parent / "assets"
 ICON_PATH = ASSETS_DIR / "icon.png"                  # <-- put your icon here (used everywhere)
 LOGO_PATH = ASSETS_DIR / "cliniq_logo.png"           # optional wide header logo (falls back to icon)
 
-FAQ_CSV = ROOT_DIR / "cliniq" / "cliniq_faq.csv"
-DEFAULT_SOP_DIR = ROOT_DIR / "data" / "sops"
-DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
+# Look in repo root first, then data/
+FAQ_CSV = ROOT_DIR / "cliniq_faq.csv"
+if not FAQ_CSV.exists():
+    FAQ_CSV = ROOT_DIR / "data" / "cliniq_faq.csv"
 
 DEFAULT_SOP_DIR = Path(__file__).parent / "data" / "sops"
 DATA_DIR = Path(os.environ.get("SOP_DIR", "").strip() or DEFAULT_SOP_DIR)
